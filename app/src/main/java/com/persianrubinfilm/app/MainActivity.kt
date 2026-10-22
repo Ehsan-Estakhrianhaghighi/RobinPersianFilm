@@ -8,6 +8,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
@@ -88,7 +89,13 @@ private fun extractTitles(doc: Document, series: Boolean): List<TitleItem> {
             ?: link.closest("h2,h3,h4")?.text()
         val title = (fromHeading ?: link.attr("title").ifBlank { link.text() }).trim()
             .ifBlank { link.selectFirst("img")?.attr("alt")?.trim().orEmpty() }
-        if (title.isBlank() || title.length > 110 || title.equals("play", true) || title.equals("view", true)) continue
+        val invalidTitles = setOf("genres", "genre", "all genres", "movies", "movie", "series", "tv shows", "tv show", "play", "view", "more", "watch", "home", "browse")
+        val slug = url.removeSuffix("/").substringAfterLast('/').lowercase()
+        if (title.isBlank() || title.length > 110 || title.lowercase() in invalidTitles || slug in invalidTitles) continue
+        // A catalog entry needs a real title or poster, not a menu/navigation link.
+        val hasTitleEvidence = fromHeading != null || link.selectFirst("img") != null ||
+            link.closest("article, .item, .movie, .tvshow, .card, .poster, .owl-item") != null
+        if (!hasTitleEvidence) continue
         val poster = imageOf(link, doc)
         val old = result[url]
         if (old == null || (old.poster == null && poster != null)) result[url] = TitleItem(title, url, poster, series)
@@ -309,6 +316,38 @@ private fun RobinApp() {
     }
 }
 
+/** Hide obvious ad banners without touching FarsiPlex's legitimate "View a short ad" unlock dialog.
+ * An unlock wall is access control, not a removable popup. */
+private const val playerAdCleaner = """
+(function() {
+  if (window.__robinAdCleanerInstalled) return;
+  window.__robinAdCleanerInstalled = true;
+  var css = `
+    ins.adsbygoogle, .adsbygoogle, .google-auto-placed,
+    [id^="google_ads_"], [id^="div-gpt-ad"], [id*="google_ads_iframe"],
+    .ad-banner, .banner-ad, .advertisement, .adsense,
+    .ad-unit, .ad-slot, .advertising-banner,
+    iframe[src*="doubleclick.net"], iframe[src*="googlesyndication.com"],
+    iframe[src*="googleadservices.com"] {
+      display:none !important; visibility:hidden !important;
+      height:0 !important; min-height:0 !important; max-height:0 !important;
+      margin:0 !important; padding:0 !important;
+      pointer-events:none !important;
+    }
+  `;
+  function installStyle() {
+    if (document.getElementById('robin-ad-style')) return;
+    var el = document.createElement('style');
+    el.id = 'robin-ad-style'; el.textContent = css;
+    (document.head || document.documentElement).appendChild(el);
+  }
+  installStyle();
+  // Some banner containers are added after the page finishes loading.
+  var observer = new MutationObserver(installStyle);
+  observer.observe(document.documentElement, {childList:true, subtree:true});
+})();
+"""
+
 /** The provider's actual website handles the unlock countdown, source switching, and quality menu.
  * This intentionally does not extract signed MP4 links or bypass access checks. */
 @SuppressLint("SetJavaScriptEnabled")
@@ -329,6 +368,10 @@ private fun FarsiWebPlayer(url: String, modifier: Modifier = Modifier) {
             isFocusable = true
             isFocusableInTouchMode = true
             webViewClient = object : WebViewClient() {
+                override fun onPageFinished(view: WebView?, loadedUrl: String?) {
+                    super.onPageFinished(view, loadedUrl)
+                    view?.evaluateJavascript(playerAdCleaner, null)
+                }
                 override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                     val target = request?.url ?: return false
                     // Block unrelated top-level redirects, while allowing site navigation and video iframes.
