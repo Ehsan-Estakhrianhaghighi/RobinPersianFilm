@@ -1,0 +1,1 @@
+v0.9: search in header, remote D-pad virtual cursor in playback (MENU to toggle, Back exits), movie Play buttons, source-discovered season/episode choices and ad-overlay updates. Source-provider playback and poster loading remain dependent on provider. Build using GitHub Actions.

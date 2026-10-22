@@ -1,0 +1,1 @@
+v0.10.6: TV detail page focus/scroll patch. Prevent WebView from stealing D-pad focus outside full screen; restore focus to Play after leaving full screen; remove unreachable TV-only bottom buttons. Retains v0.10.5 playback and series logic. Android build and Fire TV hardware validation still required.

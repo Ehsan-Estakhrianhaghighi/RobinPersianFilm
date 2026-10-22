@@ -1,0 +1,1 @@
+PersianRobinFilm branding update based on v0.10.7. Changed in-app header and Android launcher label to PersianRobinFilm, no version displayed in the header. Internal versionCode 18/versionName 0.10.8; applicationId unchanged for in-place upgrade. Existing TV remote and playback code unchanged.
