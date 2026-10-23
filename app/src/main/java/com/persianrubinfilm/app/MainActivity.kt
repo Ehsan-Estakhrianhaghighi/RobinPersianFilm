@@ -11,6 +11,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import kotlinx.coroutines.delay
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -20,6 +21,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -220,8 +223,7 @@ private fun RobinApp() {
         }
         when {
             playerUrl != null -> {
-                TextButton(onClick = { playerUrl = null }) { Text("← Back to details") }
-                FarsiWebPlayer(url = playerUrl!!, modifier = Modifier.fillMaxWidth().weight(1f))
+                FarsiWebPlayer(url = playerUrl!!, onExit = { playerUrl = null }, modifier = Modifier.fillMaxWidth().weight(1f))
             }
             selected != null -> {
                 val item = selected!!
@@ -234,7 +236,7 @@ private fun RobinApp() {
                                 modifier = Modifier.size(width = 110.dp, height = 155.dp))
                             Column(Modifier.padding(start = 16.dp)) {
                                 Text(if (item.series) "TV Series" else "Movie", color = Color.LightGray)
-                                Text("FarsiPlex provides playback sources, quality options and any required unlock step.", color = Color.LightGray)
+                                Text("Choose a player and video quality inside RobinPersianFilm. Some sources require an unlock step before playing.", color = Color.LightGray)
                                 TextButton(onClick = { store.favorite(item.page); favorites = store.favorites() }) { Text(if (item.page in favorites) "♥ Saved" else "♡ My List") }
                             }
                         }
@@ -266,7 +268,7 @@ private fun RobinApp() {
                     } else {
                         item { Button(onClick = { store.mark(item.page); watched = store.watched(); playerUrl = item.page }) { Text("▶ Play movie") } }
                     }
-                    item { Text("Playback stays on FarsiPlex. If an advertisement is required to unlock a video, complete it normally. Player and quality choices are available when offered by the website.", color = Color.LightGray, fontSize = 13.sp) }
+                    item { Text("Playback stays inside RobinPersianFilm. Complete a provider-required unlock if shown. Player and quality options appear as they become available.", color = Color.LightGray, fontSize = 13.sp) }
                     item { Spacer(Modifier.height(24.dp)) }
                 }
             }
@@ -348,14 +350,50 @@ private const val playerAdCleaner = """
 })();
 """
 
-/** The provider's actual website handles the unlock countdown, source switching, and quality menu.
- * This intentionally does not extract signed MP4 links or bypass access checks. */
+/** The WebView remains inside the app. We do NOT bypass FarsiPlex's 24-hour
+ * ad unlock, copy signed streams, or circumvent access controls. The native controls
+ * below only click player/quality controls actually present in the page's DOM.
+ * Cross-origin iframe controls remain provider-managed. */
+private fun findOptionsScript(): String = """
+(function(){
+ function visible(x){return !!(x.getClientRects().length) && getComputedStyle(x).visibility !== 'hidden';}
+ var nodes = [...document.querySelectorAll('button,a,[role=tab],li,.nav-link,.server-item,.source-item,[class*='player-tab'],[class*='quality-item']')].filter(visible);
+ var players=[], quality=[];
+ nodes.forEach(function(n){
+  var t=(n.textContent||'').trim().replace(/\s+/g,' ');
+  var m=t.match(/^Player\s*([1-9])$/i); if(m && !players.includes(m[1])) players.push(m[1]);
+  var q=t.match(/^(360|480|720|1080|1440|2160)\s*p?$/i); if(q && !quality.includes(q[1])) quality.push(q[1]);
+ });
+ return players.join(',')+'|'+quality.join(',');
+})();
+"""
+
+private fun selectOptionScript(kind: String, value: String): String {
+    val safe = value.filter { it.isDigit() }
+    val wanted = if (kind == "player") "Player $safe" else safe
+    return """(function(){
+      var wanted='${wanted}';
+      var nodes=[...document.querySelectorAll('button,a,[role=tab],li,.nav-link,.server-item,.source-item,[class*='player-tab'],[class*='quality-item']')];
+      var n=nodes.find(function(el){
+        var t=(el.textContent||'').trim().replace(/\s+/g,' ');
+        return el.getClientRects().length && (t.toLowerCase() === wanted.toLowerCase() ||
+          (${if (kind == "quality") "true" else "false"} && t.toLowerCase()===wanted.toLowerCase()+'p'));
+      });
+      if(n){n.click();return 'selected';}return 'unavailable';
+    })();"""
+}
+
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-private fun FarsiWebPlayer(url: String, modifier: Modifier = Modifier) {
+private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     var customView by remember { mutableStateOf<View?>(null) }
     var customCallback by remember { mutableStateOf<WebChromeClient.CustomViewCallback?>(null) }
+    var availablePlayers by remember(url) { mutableStateOf<List<String>>(emptyList()) }
+    var availableQualities by remember(url) { mutableStateOf<List<String>>(emptyList()) }
+    var selectedPlayer by remember(url) { mutableStateOf("") }
+    var selectedQuality by remember(url) { mutableStateOf("") }
+    var playerMessage by remember(url) { mutableStateOf("Loading video options…") }
     val web = remember(url) {
         WebView(context).apply {
             settings.javaScriptEnabled = true
@@ -374,11 +412,28 @@ private fun FarsiWebPlayer(url: String, modifier: Modifier = Modifier) {
                 }
                 override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                     val target = request?.url ?: return false
-                    // Block unrelated top-level redirects, while allowing site navigation and video iframes.
-                    return request.isForMainFrame && target.host?.let { it != "farsiplex.com" && it != "www.farsiplex.com" } == true
+                    // Allow site navigation and embedded media; prevent unrelated TOP-LEVEL ads.
+                    val hostname = target.host?.lowercase() ?: return true
+                    return request.isForMainFrame && hostname != "farsiplex.com" && hostname != "www.farsiplex.com"
                 }
             }
             loadUrl(url)
+        }
+    }
+    // Options can be inserted dynamically after the legitimate unlock step.
+    LaunchedEffect(web) {
+        while (true) {
+            web.evaluateJavascript(findOptionsScript()) { raw ->
+                val decoded = raw.removeSurrounding("\"").replace("\\n", "")
+                val parts = decoded.split('|')
+                val players = parts.getOrNull(0)?.split(',')?.filter { it.isNotBlank() }.orEmpty()
+                val qualities = parts.getOrNull(1)?.split(',')?.filter { it.isNotBlank() }.orEmpty()
+                availablePlayers = players
+                availableQualities = qualities
+                if (players.isNotEmpty() || qualities.isNotEmpty()) playerMessage = "Choose a source or quality below"
+                else playerMessage = "Complete the site unlock if shown. Video options will appear here when available."
+            }
+            delay(2000)
         }
     }
     DisposableEffect(web) { onDispose { web.stopLoading(); web.destroy() } }
@@ -394,7 +449,43 @@ private fun FarsiWebPlayer(url: String, modifier: Modifier = Modifier) {
         }
     }
     Box(modifier.background(Color.Black)) {
-        AndroidView(factory = { web }, modifier = Modifier.fillMaxSize())
+        Column(Modifier.fillMaxSize()) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = onExit) { Text("← Back to details") }
+                Spacer(Modifier.weight(1f))
+                Text("RobinPersianFilm Player", fontSize = 14.sp, color = Color.LightGray)
+            }
+            if (customView == null) {
+                if (availablePlayers.isNotEmpty()) {
+                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Player:", color = Color.White, fontSize = 13.sp)
+                        availablePlayers.forEach { number ->
+                            TextButton(onClick = {
+                                web.evaluateJavascript(selectOptionScript("player", number)) { result ->
+                                    if (result.contains("selected")) { selectedPlayer = number; playerMessage = "Player $number selected" }
+                                    else playerMessage = "Use the player's own source controls if they are inside an iframe"
+                                }
+                            }) { Text("${if (selectedPlayer == number) "✓ " else ""}Player $number") }
+                        }
+                    }
+                }
+                if (availableQualities.isNotEmpty()) {
+                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Quality:", color = Color.White, fontSize = 13.sp)
+                        availableQualities.forEach { number ->
+                            TextButton(onClick = {
+                                web.evaluateJavascript(selectOptionScript("quality", number)) { result ->
+                                    if (result.contains("selected")) { selectedQuality = number; playerMessage = "$number quality selected" }
+                                    else playerMessage = "This quality must be selected inside the video provider"
+                                }
+                            }) { Text("${if (selectedQuality == number) "✓ " else ""}${number}p") }
+                        }
+                    }
+                }
+                Text(playerMessage, fontSize = 12.sp, color = Color.LightGray, maxLines = 2, modifier = Modifier.padding(bottom = 5.dp))
+            }
+            AndroidView(factory = { web }, modifier = Modifier.fillMaxSize().weight(1f))
+        }
         customView?.let { view ->
             AndroidView(factory = { parent ->
                 (view.parent as? ViewGroup)?.removeView(view)
