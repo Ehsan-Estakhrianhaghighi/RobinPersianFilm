@@ -450,6 +450,91 @@ private const val followFinalPlayerScript = """
 })();
 """
 
+/** After a user presses Play in RobinPersianFilm, try to START the site's
+ * required rewarded-ad access flow once, by pressing its first-party
+ * "View a short ad" option. Never skip the ad, fake its completion, click
+ * external ad creatives, or repeatedly trigger the offerwall. Third-party
+ * iframe/shadow-root controls may refuse scripted interaction, in which
+ * case the normal prompt stays available for the viewer. */
+private const val startRequiredAccessAdScript = """
+(function(){
+  if(!/^(www\.)?farsiplex\.com$/i.test(location.hostname)) return 'offsite';
+  function visible(el){
+    if(!el || !el.getBoundingClientRect) return false;
+    var r=el.getBoundingClientRect(), cs=getComputedStyle(el);
+    return r.width>6 && r.height>6 && cs.visibility!=='hidden' && cs.display!=='none';
+  }
+  function normalized(el){return (el.innerText||el.textContent||'').replace(/\s+/g,' ').trim();}
+  function eligibleRoot(el){
+    if(!visible(el)) return false;
+    var t=normalized(el).toLowerCase();
+    return t.includes('unlock more content') && t.includes('view a short ad') && t.length<1800;
+  }
+  // The site's offerwall may be inserted later, so inspect both modal
+  // containers and small ancestors of its exact unlock heading.
+  var roots=[...document.querySelectorAll('[role="dialog"],[aria-modal="true"],.modal,.modal-dialog,.popup,.unlock-modal,[class*="unlock"],[id*="unlock"]')]
+    .filter(eligibleRoot);
+  if(!roots.length){
+    var headings=[...document.querySelectorAll('h1,h2,h3,h4,div,span,p,strong')].filter(function(el){
+      return visible(el) && normalized(el).toLowerCase()==='unlock more content';
+    });
+    for(var i=0;i<headings.length;i++){
+      var parent=headings[i];
+      for(var depth=0;depth<6 && parent;depth++,parent=parent.parentElement){
+        if(eligibleRoot(parent)){roots.push(parent);break;}
+      }
+    }
+  }
+  if(!roots.length) return 'not-shown';
+  // Do not re-trigger rewarded impressions across redirects or DOM polling.
+  var key='robin_unlock_auto_v18';
+  try {
+    var last=Number(sessionStorage.getItem(key)||0);
+    if(last>0 && Date.now()-last<120000) return 'previously-triggered';
+  }catch(e){}
+  if(window.__robinAccessAdStarted) return 'previously-triggered';
+  function actionable(el){
+    return el.closest('button,a,[role="button"],[onclick],input[type="button"],[tabindex]');
+  }
+  for(var j=0;j<roots.length;j++){
+    var root=roots[j];
+    // Select the control belonging to the specific "View a short ad" option,
+    // not a generic Play button, banner advertisement, or the full modal.
+    var nodes=[...root.querySelectorAll('button,a,[role="button"],[onclick],label,span,div,p')]
+      .filter(function(el){
+        if(!visible(el)) return false;
+        var t=normalized(el).toLowerCase();
+        return t.includes('view a short ad') && t.length<160 &&
+               !/withdraw money|transfer money|install extension|learn more|download now/.test(t);
+      });
+    nodes.sort(function(a,b){return normalized(a).length-normalized(b).length;});
+    for(var k=0;k<nodes.length;k++){
+      var el=nodes[k], button=actionable(el);
+      if(!button){
+        // An option card can be a click-bound container with no semantic role.
+        // Use only a small ancestor INSIDE the identified offerwall.
+        var cur=el;
+        for(var depth=0;depth<3 && cur && cur!==root;depth++,cur=cur.parentElement){
+          if(cur.onclick || getComputedStyle(cur).cursor==='pointer') {button=cur;break;}
+        }
+      }
+      if(!button || !root.contains(button) || !visible(button)) continue;
+      // Never follow off-site ad links or click a video advertisement itself.
+      var href=button.getAttribute('href')||'';
+      if(href && href!=='#' && !href.startsWith('javascript:')){
+        try {if(new URL(href,location.href).origin!==location.origin) continue;}
+        catch(e){continue;}
+      }
+      window.__robinAccessAdStarted=true;
+      try{sessionStorage.setItem(key,String(Date.now()));}catch(e){}
+      button.click();
+      return 'started';
+    }
+  }
+  return 'manual-required';
+})();
+"""
+
 /** Hide obvious ad banners without touching FarsiPlex's legitimate "View a short ad" unlock dialog.
  * An unlock wall is access control, not a removable popup. */
 private const val playerAdCleaner = """
@@ -629,19 +714,30 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                     val isFinal = isFinalPlayerPage(loadedUrl)
                     view?.evaluateJavascript(playerAdCleaner) {
                         view.evaluateJavascript(compactPlaybackScript) {
-                            if (isFinal) {
-                                // Reveal only after the final document has loaded and
-                                // its cosmetic banner rules have been installed.
-                                showWebContent = true
-                                manualContinuation = false
-                                playerMessage = "Choose a player or quality if available"
-                            } else {
-                                view.evaluateJavascript(followFinalPlayerScript) { result ->
-                                    val status = result.removeSurrounding("\"")
-                                    if (status == "unlock-required") {
-                                        // Never skip site-required 24-hour access steps.
-                                        showWebContent = true
-                                        playerMessage = "Complete FarsiPlex's required access step to play"
+                            // A user already requested playback. If an accessible
+                            // FarsiPlex offerwall is present, press ONLY its "View a
+                            // short ad" option to begin the required ad normally.
+                            view.evaluateJavascript(startRequiredAccessAdScript) { unlockRaw ->
+                                val unlock = unlockRaw.removeSurrounding("\"")
+                                if (unlock == "started" || unlock == "previously-triggered") {
+                                    showWebContent = true // The required ad must be viewable.
+                                    manualContinuation = false
+                                    playerMessage = "Required access ad started. Let it finish if shown."
+                                } else if (unlock == "manual-required") {
+                                    showWebContent = true
+                                    manualContinuation = false
+                                    playerMessage = "Tap View a short ad if the provider requires a real click."
+                                } else if (isFinal) {
+                                    showWebContent = true
+                                    manualContinuation = false
+                                    playerMessage = "Choose a player or quality if available"
+                                } else {
+                                    view.evaluateJavascript(followFinalPlayerScript) { result ->
+                                        val status = result.removeSurrounding("\"")
+                                        if (status == "unlock-required") {
+                                            showWebContent = true
+                                            playerMessage = "Completing FarsiPlex's required access step"
+                                        }
                                     }
                                 }
                             }
@@ -671,17 +767,33 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     LaunchedEffect(web) {
         while (true) {
             val atFinal = isFinalPlayerPage(web.url)
-            if (!atFinal) {
-                // A single attempt per document, never at the access-unlock gate.
-                web.evaluateJavascript(followFinalPlayerScript) { raw ->
-                    val status = raw.removeSurrounding("\"")
-                    if (status == "unlock-required") {
+            // Site offerwalls are often injected *after* onPageFinished.
+            // The script itself enforces a single, rate-limited attempt.
+            web.evaluateJavascript(startRequiredAccessAdScript) { unlockRaw ->
+                when (unlockRaw.removeSurrounding("\"")) {
+                    "started", "previously-triggered" -> {
                         showWebContent = true
                         manualContinuation = false
-                        playerMessage = "Complete FarsiPlex's required access step to play"
+                        playerMessage = "Required access ad started. Let it finish if shown."
+                    }
+                    "manual-required" -> {
+                        showWebContent = true
+                        manualContinuation = false
+                        playerMessage = "Tap View a short ad if FarsiPlex requires a real click."
+                    }
+                    else -> {
+                        if (!atFinal) {
+                            web.evaluateJavascript(followFinalPlayerScript) { raw ->
+                                if (raw.removeSurrounding("\"") == "unlock-required") {
+                                    showWebContent = true
+                                    manualContinuation = false
+                                }
+                            }
+                        }
                     }
                 }
-            } else if (lastCompletedPage.isNotBlank() && isFinalPlayerPage(lastCompletedPage)) {
+            }
+            if (atFinal && lastCompletedPage.isNotBlank() && isFinalPlayerPage(lastCompletedPage)) {
                 showWebContent = true
                 manualContinuation = false
             }
