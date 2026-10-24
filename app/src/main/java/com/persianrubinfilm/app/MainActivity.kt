@@ -350,6 +350,53 @@ private const val playerAdCleaner = """
 })();
 """
 
+/** Keep only the site's legitimate playback surface visible in the embedded view.
+ * Does not dismiss the provider unlock, click advertisements, or fabricate media URLs. */
+private const val compactPlaybackScript = """
+(function(){
+ if (window.__robinCompactPlayer) return;
+ window.__robinCompactPlayer=true;
+ var css = `
+   header.site-header, .site-header, .main-header, .header-menu,
+   footer.site-footer, .site-footer,
+   .sidebar, aside.widget-area,
+   .breadcrumb, .breadcrumbs,
+   .top-banner, .sticky-ad, .floating-ad,
+   .ad-container, .ad-wrapper, .advertising,
+   [class*='google-auto-placed'], [class*='adsbygoogle'] {
+     display:none !important; max-height:0 !important;
+   }
+   html,body { scroll-behavior:smooth; }
+ `;
+ var style=document.createElement('style');
+ style.id='robin-compact-player';style.textContent=css;
+ (document.head || document.documentElement).appendChild(style);
+})();
+"""
+
+/** On a legitimate, unlocked playback page, bring the real player/source section
+ * into view rather than making the viewer search through the article. */
+private fun focusAvailablePlayerScript(): String = """
+(function(){
+ if (window.__robinPlayerLocated) return 'located';
+ var els=[...document.querySelectorAll('video, iframe, [class*="player"], [id*="player"], h2, h3')];
+ var target=els.find(function(x){
+   var text=(x.textContent||'').trim();
+   var tag=x.tagName.toLowerCase();
+   var src=x.getAttribute('src')||'';
+   var rect=x.getBoundingClientRect();
+   return rect.width>150 && rect.height>50 && (
+     tag==='video' || (tag==='iframe' && !/ads|doubleclick|google/i.test(src)) ||
+     /video sources|player 1/i.test(text.slice(0,90))
+   );
+ });
+ if (!target) return 'waiting';
+ window.__robinPlayerLocated=true;
+ target.scrollIntoView({block:'center',behavior:'instant'});
+ return 'located';
+})();
+"""
+
 /** The WebView remains inside the app. We do NOT bypass FarsiPlex's 24-hour
  * ad unlock, copy signed streams, or circumvent access controls. The native controls
  * below only click player/quality controls actually present in the page's DOM.
@@ -409,6 +456,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                 override fun onPageFinished(view: WebView?, loadedUrl: String?) {
                     super.onPageFinished(view, loadedUrl)
                     view?.evaluateJavascript(playerAdCleaner, null)
+                    view?.evaluateJavascript(compactPlaybackScript, null)
                 }
                 override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                     val target = request?.url ?: return false
@@ -430,8 +478,11 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                 val qualities = parts.getOrNull(1)?.split(',')?.filter { it.isNotBlank() }.orEmpty()
                 availablePlayers = players
                 availableQualities = qualities
-                if (players.isNotEmpty() || qualities.isNotEmpty()) playerMessage = "Choose a source or quality below"
-                else playerMessage = "Complete the site unlock if shown. Video options will appear here when available."
+                if (players.isNotEmpty() || qualities.isNotEmpty()) {
+                    playerMessage = "Choose a source or quality below"
+                    web.evaluateJavascript(focusAvailablePlayerScript(), null)
+                }
+                else playerMessage = "Complete any required unlock. Available playback controls will appear here."
             }
             delay(2000)
         }
