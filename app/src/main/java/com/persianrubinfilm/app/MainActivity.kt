@@ -158,23 +158,35 @@ private suspend fun readEpisodes(seriesUrl: String): List<EpisodeItem> = withCon
     found.values.sortedWith(compareBy(EpisodeItem::season, EpisodeItem::number))
 }
 
-/** Resolve only playback links explicitly published on the selected FarsiPlex title page.
- * We do not manufacture access tokens, dismiss unlock prompts, or jump across providers.
- * If the final playback link is created dynamically after authorization, retain the
- * original page as a fallback. */
+/** Only use a final player address when the selected title publishes a link that
+ * carries title-specific context (such as a query string). The generic HQ URL on
+ * its own is NOT enough to identify the movie. For generic links the WebView follows
+ * the site's actual Play element so its browser session can be initialized normally.
+ * Required unlock dialogs remain entirely controlled by the provider. */
 private suspend fun resolvePublishedPlaybackPage(titlePage: String): String = withContext(Dispatchers.IO) {
     if (!sameSite(titlePage)) return@withContext titlePage
     try {
         val doc = readPage(titlePage)
-        val candidates = doc.select("a[href], iframe[src]").mapNotNull { node ->
-            val link = if (node.tagName() == "iframe") node.absUrl("src") else node.absUrl("href")
+        val candidates = doc.select("a[href], iframe[src], [data-href], [data-url]").mapNotNull { node ->
+            val link = when {
+                node.tagName() == "iframe" -> node.absUrl("src")
+                node.hasAttr("href") -> node.absUrl("href")
+                node.hasAttr("data-href") -> URI(doc.location()).resolve(node.attr("data-href")).toString()
+                node.hasAttr("data-url") -> URI(doc.location()).resolve(node.attr("data-url")).toString()
+                else -> ""
+            }
             if (!sameSite(link)) null else {
-                val path = URI(link).path.orEmpty().lowercase()
-                val label = (node.text() + " " + node.attr("title") + " " + node.className()).lowercase()
-                val isPlayback = path.contains("/play-quick-view") ||
-                    path.matches(Regex(".*/(watch|stream|play)(/.*)?")) ||
-                    (label.contains("watch now") && path.contains("/play/"))
-                if (isPlayback && link != titlePage) link else null
+                val parsed = URI(link)
+                val path = parsed.path.orEmpty().lowercase()
+                val isPlayback = path.startsWith("/play-hq-player/") ||
+                    path.startsWith("/play-quick-view/") ||
+                    path.matches(Regex(".*/(watch|stream|play)(/.*)?"))
+                // A generic /play-hq-player/ page may rely on JavaScript state. Do not
+                // directly load it without clicking the title's actual link first.
+                val carriesContext = !parsed.rawQuery.isNullOrEmpty() ||
+                    path.removeSuffix("/").split('/').size > 2 ||
+                    node.tagName() == "iframe"
+                if (isPlayback && carriesContext && link != titlePage) link else null
             }
         }
         candidates.firstOrNull() ?: titlePage
@@ -350,6 +362,71 @@ private fun RobinApp() {
     }
 }
 
+/** When the title page publishes a SAME-SITE Play link to the final player,
+ * follow the original element so its click handler can preserve title context.
+ * Never click a generic preview/advertisement or interact with unlock dialogs.
+ * The script does nothing when no explicit HQ-player link exists. */
+private const val followFinalPlayerScript = """
+(function(){
+  var path=(location.pathname||'').toLowerCase();
+  if(path.indexOf('/play-hq-player/')===0) return 'final';
+  if(path.indexOf('/play-quick-view/')===0) return 'quick-view';
+  if(!/^\/(movie|episode)\//.test(path)) return 'other';
+  if(window.__robinFollowedFinalLink) return 'already-tried';
+  function isVisible(el){
+    var s=getComputedStyle(el), r=el.getBoundingClientRect();
+    return s.visibility!=='hidden' && s.display!=='none' && r.width>0 && r.height>0;
+  }
+  // Never click a site's access/advertising unlock dialog automatically.
+  var dialogs=[...document.querySelectorAll('[role=dialog],.modal,.modal-dialog,.popup,.unlock-modal,[class*=unlock]')];
+  if(dialogs.some(function(el){
+    return isVisible(el) && /unlock more content|view a short ad|watch.*to unlock/i.test((el.textContent||'').slice(0,1000));
+  })) return 'unlock-required';
+  var links=[...document.querySelectorAll('a[href], [data-href], [data-url]')];
+  var candidates=links.filter(function(el){
+    var raw=el.getAttribute('href')||el.getAttribute('data-href')||el.getAttribute('data-url')||'';
+    try {
+      var u=new URL(raw,location.href);
+      return u.origin===location.origin && /^\/play-(?:hq-player|quick-view)\/?$/i.test(u.pathname);
+    } catch(e) {return false;}
+  });
+  if(candidates.length){
+    candidates.sort(function(a,b){
+      function score(n){
+        var t=((n.textContent||'')+' '+(n.className||'')+' '+(n.getAttribute('title')||'')).toLowerCase();
+        return (/(play|watch|video|movie)/.test(t)?2:0) + (n.closest('.poster,.cover,.play,.video,.movie')?1:0);
+      }
+      return score(b)-score(a);
+    });
+    window.__robinFollowedFinalLink=true;
+    candidates[0].click(); // Original site handler retains selected title/session.
+    return 'following-final-link';
+  }
+  // Some FarsiPlex titles expose their final player only via a JavaScript
+  // Play overlay. Click ONLY a visible media-poster Play control on this title
+  // page, never an unknown ad or any element in an unlock dialog.
+  var buttons=[...document.querySelectorAll('a,button,[role=button],[onclick],.play-button,.play-btn,.btn-play')];
+  var previews=buttons.filter(function(el){
+    if(!isVisible(el) || el.closest('[role=dialog],.modal,.popup,.unlock-modal')) return false;
+    var raw=el.getAttribute('href')||'';
+    if(raw){
+      try{ var u=new URL(raw,location.href); if(u.origin!==location.origin) return false; }
+      catch(e){ return false; }
+    }
+    var name=((el.textContent||'')+' '+(el.className||'')+' '+(el.getAttribute('aria-label')||'')+' '+(el.getAttribute('title')||'')).toLowerCase().slice(0,120);
+    var isPlay=/\b(play|watch now|watch movie|play video)\b/.test(name);
+    var inPreview=!!el.closest('[class*=poster],[class*=preview],[class*=trailer],[class*=video],[class*=player],[class*=cover]');
+    return isPlay && inPreview;
+  });
+  if(previews.length){
+    window.__robinFollowedFinalLink=true;
+    previews[0].click();
+    return 'following-preview-play';
+  }
+  return 'no-published-final-link';
+})();
+"""
+
 /** Hide obvious ad banners without touching FarsiPlex's legitimate "View a short ad" unlock dialog.
  * An unlock wall is access control, not a removable popup. */
 private const val playerAdCleaner = """
@@ -489,6 +566,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                     super.onPageFinished(view, loadedUrl)
                     view?.evaluateJavascript(playerAdCleaner, null)
                     view?.evaluateJavascript(compactPlaybackScript, null)
+                    view?.evaluateJavascript(followFinalPlayerScript, null)
                 }
                 override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                     val target = request?.url ?: return false
@@ -503,18 +581,27 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     // Options can be inserted dynamically after the legitimate unlock step.
     LaunchedEffect(web) {
         while (true) {
+            // Some sites inject their Play link after the initial page load.
+            // Recheck; the JavaScript is idempotent and never clicks unlock ads.
+            web.evaluateJavascript(followFinalPlayerScript, null)
             web.evaluateJavascript(findOptionsScript()) { raw ->
                 val decoded = raw.removeSurrounding("\"").replace("\\n", "")
                 val parts = decoded.split('|')
-                val players = parts.getOrNull(0)?.split(',')?.filter { it.isNotBlank() }.orEmpty()
-                val qualities = parts.getOrNull(1)?.split(',')?.filter { it.isNotBlank() }.orEmpty()
+                // evaluateJavascript returns literal 'null' until the document is ready.
+                // Never display the erroneous 'Player null' option.
+                val players = parts.getOrNull(0)?.split(',')?.filter { it.matches(Regex("[1-9]")) }.orEmpty()
+                val qualities = parts.getOrNull(1)?.split(',')?.filter {
+                    it in setOf("360", "480", "720", "1080", "1440", "2160")
+                }.orEmpty()
                 availablePlayers = players
                 availableQualities = qualities
                 if (players.isNotEmpty() || qualities.isNotEmpty()) {
                     playerMessage = "Choose a source or quality below"
                     web.evaluateJavascript(focusAvailablePlayerScript(), null)
                 }
-                else playerMessage = "Complete any required unlock. Available playback controls will appear here."
+                else playerMessage = if (web.url?.contains("/play-hq-player/") == true)
+                    "Final player is loading. Complete any provider-required unlock if shown."
+                else "Finding the selected title's player. If it isn't published yet, use the site's Play link after any required unlock."
             }
             delay(2000)
         }
