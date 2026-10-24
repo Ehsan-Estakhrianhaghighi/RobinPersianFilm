@@ -1,37 +1,24 @@
-# RobinPersianFilm v1.8 (Android / Fire TV)
+# RobinPersianFilm v1.10 — Clean final-player screen
 
-This release retains the v1.7 player navigation, catalog, poster, app icon,
-quality/source selection, and nonessential-banner filtering.
+This update is based on v1.9. The final FarsiPlex player page can show the site-wide navigation row (hamburger menu, logo, search) and an unrelated article below the video sources. That website chrome is not part of the playback controls.
 
-## New: optional automatic *start* of FarsiPlex's required access ad
+## Changes
 
-After the viewer explicitly chooses **Play Movie** or **Play Selected Episode**,
-RobinPersianFilm checks the visible FarsiPlex access dialog. If its actual
-**View a short ad** control is present in the same-origin page DOM, the app
-clicks **that specific control once** to begin the site's normal rewarded-ad
-flow, rather than making the viewer click it separately. The advertisement
-must still play and finish normally for the provider to grant access.
+- Hides FarsiPlex's website **menu, logo, and search** when `/play-hq-player/` is loaded inside the app, including site headers implemented with non-standard HTML elements.
+- Hides the unrelated article below the video-source/quality list, when identifiable.
+- Reapplies the player-page cleanup if the website injects or redraws these elements, with throttling to avoid unnecessary work on Fire TV.
+- **Does not remove** the actual video surface, Player 1/2/3, available 480p/720p/1080p source links, or the website's required 24-hour unlock step.
+- Keeps v1.9's existing navigation, unlock handling, search, movies, episodes, and app branding. No changes to `.github/workflows/android.yml`.
 
-The code does **not** bypass the site's 24-hour unlock, mark ads as watched,
-click third-party ad creatives, or automatically follow external ad links.
-It rate-limits the attempt so page polling and navigation cannot generate
-repeated ad activations.
+## Update the existing GitHub project
 
-### Limitations
-
-Google/third-party offerwall controls may live in a cross-origin iframe or
-require a trusted physical user gesture. Android WebView's page JavaScript
-cannot click through that isolation. If the one-time automated activation
-is not permitted, the provider's dialog remains visible for a manual tap.
-The update is **experimental** until tested against FarsiPlex on a phone
-and Fire Stick. The app has not been fully compiled in this environment.
-
-## GitHub update
-
-If you already installed v1.7, replace:
+Replace exactly:
 
 - `app/src/main/java/com/persianrubinfilm/app/MainActivity.kt`
 - `app/build.gradle.kts`
 
-Your `.github/workflows/android.yml` remains unchanged.
-Build through GitHub Actions and publish the resulting `app-debug.apk`.
+Commit, confirm that GitHub Actions succeeds, then install the updated APK. This update changes version metadata to `1.10.0` without adding a visible version number to the title.
+
+## Verification and limitations
+
+The cleanup JavaScript passed Node syntax validation and mock-DOM checks that it hides sample website navigation and unrelated article elements **without hiding** simulated player/quality controls or the unlock dialog. The ZIPs were checked for integrity. A full Android build and a real-device playback test were **not** possible in this environment. FarsiPlex may change its layout later, so additional selectors could be necessary.

@@ -450,12 +450,12 @@ private const val followFinalPlayerScript = """
 })();
 """
 
-/** After a user presses Play in RobinPersianFilm, try to START the site's
- * required rewarded-ad access flow once, by pressing its first-party
- * "View a short ad" option. Never skip the ad, fake its completion, click
- * external ad creatives, or repeatedly trigger the offerwall. Third-party
- * iframe/shadow-root controls may refuse scripted interaction, in which
- * case the normal prompt stays available for the viewer. */
+/** The user has requested playback. When FarsiPlex presents its REQUIRED
+ *  access-ad dialog, try its first-party "View a short ad" control ONCE per
+ *  newly presented dialog. A second, new dialog after changing player/quality
+ *  is eligible for a new attempt; the old two-minute sessionStorage lockout
+ *  prevented that. This NEVER marks an advertisement watched or bypasses the
+ *  provider's access requirements. A scripted click may be rejected. */
 private const val startRequiredAccessAdScript = """
 (function(){
   if(!/^(www\.)?farsiplex\.com$/i.test(location.hostname)) return 'offsite';
@@ -464,72 +464,92 @@ private const val startRequiredAccessAdScript = """
     var r=el.getBoundingClientRect(), cs=getComputedStyle(el);
     return r.width>6 && r.height>6 && cs.visibility!=='hidden' && cs.display!=='none';
   }
-  function normalized(el){return (el.innerText||el.textContent||'').replace(/\s+/g,' ').trim();}
+  function txt(el){return (el.innerText||el.textContent||'').replace(/\s+/g,' ').trim();}
   function eligibleRoot(el){
     if(!visible(el)) return false;
-    var t=normalized(el).toLowerCase();
+    var t=txt(el).toLowerCase();
     return t.includes('unlock more content') && t.includes('view a short ad') && t.length<1800;
   }
-  // The site's offerwall may be inserted later, so inspect both modal
-  // containers and small ancestors of its exact unlock heading.
-  var roots=[...document.querySelectorAll('[role="dialog"],[aria-modal="true"],.modal,.modal-dialog,.popup,.unlock-modal,[class*="unlock"],[id*="unlock"]')]
-    .filter(eligibleRoot);
+  // This can only see the FarsiPlex document, NOT protected cross-origin ad frames.
+  var roots=[...document.querySelectorAll('[role="dialog"],[aria-modal="true"],.modal,.modal-dialog,.popup,.unlock-modal,[class*="unlock"],[id*="unlock"]')].filter(eligibleRoot);
   if(!roots.length){
     var headings=[...document.querySelectorAll('h1,h2,h3,h4,div,span,p,strong')].filter(function(el){
-      return visible(el) && normalized(el).toLowerCase()==='unlock more content';
+      return visible(el) && txt(el).toLowerCase()==='unlock more content';
     });
     for(var i=0;i<headings.length;i++){
-      var parent=headings[i];
-      for(var depth=0;depth<6 && parent;depth++,parent=parent.parentElement){
-        if(eligibleRoot(parent)){roots.push(parent);break;}
+      var el=headings[i];
+      for(var depth=0;depth<6 && el;depth++,el=el.parentElement){
+        if(eligibleRoot(el)){roots.push(el);break;}
       }
     }
   }
-  if(!roots.length) return 'not-shown';
-  // Do not re-trigger rewarded impressions across redirects or DOM polling.
-  var key='robin_unlock_auto_v18';
-  try {
-    var last=Number(sessionStorage.getItem(key)||0);
-    if(last>0 && Date.now()-last<120000) return 'previously-triggered';
-  }catch(e){}
-  if(window.__robinAccessAdStarted) return 'previously-triggered';
-  function actionable(el){
-    return el.closest('button,a,[role="button"],[onclick],input[type="button"],[tabindex]');
+  var state=window.__robinAccessState;
+  if(!state) state=window.__robinAccessState={root:null,shown:false,attempted:false,lastAttempt:0};
+  // Some providers reuse the SAME popup element when changing Player/quality;
+  // mark the old prompt finished when a genuine source selector is clicked.
+  if(!window.__robinSourceChangeListener){
+    window.__robinSourceChangeListener=true;
+    document.addEventListener('click',function(event){
+      var el=event.target && event.target.closest && event.target.closest('button,a,li,[role="button"],[role="tab"]');
+      if(!el) return;
+      var title=txt(el);
+      if(!/^(?:Player\s*[1-9]|(?:360|480|720|1080|1440|2160)\s*p?)$/i.test(title)) return;
+      if(el.closest('[role="dialog"],.modal,.modal-dialog,.popup,.unlock-modal')) return;
+      var st=window.__robinAccessState;
+      if(st){st.shown=false;st.root=null;st.attempted=false;}
+    },true);
   }
-  for(var j=0;j<roots.length;j++){
-    var root=roots[j];
-    // Select the control belonging to the specific "View a short ad" option,
-    // not a generic Play button, banner advertisement, or the full modal.
-    var nodes=[...root.querySelectorAll('button,a,[role="button"],[onclick],label,span,div,p')]
-      .filter(function(el){
-        if(!visible(el)) return false;
-        var t=normalized(el).toLowerCase();
-        return t.includes('view a short ad') && t.length<160 &&
-               !/withdraw money|transfer money|install extension|learn more|download now/.test(t);
-      });
-    nodes.sort(function(a,b){return normalized(a).length-normalized(b).length;});
-    for(var k=0;k<nodes.length;k++){
-      var el=nodes[k], button=actionable(el);
-      if(!button){
-        // An option card can be a click-bound container with no semantic role.
-        // Use only a small ancestor INSIDE the identified offerwall.
-        var cur=el;
-        for(var depth=0;depth<3 && cur && cur!==root;depth++,cur=cur.parentElement){
-          if(cur.onclick || getComputedStyle(cur).cursor==='pointer') {button=cur;break;}
-        }
+  if(!roots.length){
+    // The old prompt was dismissed. Allow another click if a NEW prompt appears.
+    state.shown=false;
+    state.root=null;
+    state.attempted=false;
+    return 'not-shown';
+  }
+  // Prefer the smallest actual dialog, rather than an outer page container.
+  roots.sort(function(a,b){return txt(a).length-txt(b).length;});
+  var root=roots[0], now=Date.now();
+  if(!state.shown || state.root!==root){
+    state.root=root;
+    state.shown=true;
+    state.attempted=false;
+  }
+  if(state.attempted){
+    return now-state.lastAttempt<1400 ? 'click-pending' : 'still-visible';
+  }
+  // A freshly replaced DOM node may still represent the same offerwall.
+  // This short safety interval avoids repeated accidental ad interactions.
+  if(now-state.lastAttempt<5000) return 'cooldown';
+  function actionable(el){return el.closest('button,a,[role="button"],[onclick],input[type="button"],[tabindex]');}
+  var candidates=[...root.querySelectorAll('button,a,[role="button"],[onclick],label,span,div,p')].filter(function(el){
+    if(!visible(el)) return false;
+    var t=txt(el).toLowerCase();
+    return t.includes('view a short ad') && t.length<160 &&
+      !/withdraw money|transfer money|install extension|learn more|download now/.test(t);
+  });
+  candidates.sort(function(a,b){return txt(a).length-txt(b).length;});
+  for(var j=0;j<candidates.length;j++){
+    var el=candidates[j], button=actionable(el);
+    if(!button){
+      for(var cur=el, depth=0;depth<3 && cur && cur!==root;depth++,cur=cur.parentElement){
+        if(cur.onclick || getComputedStyle(cur).cursor==='pointer'){button=cur;break;}
       }
-      if(!button || !root.contains(button) || !visible(button)) continue;
-      // Never follow off-site ad links or click a video advertisement itself.
-      var href=button.getAttribute('href')||'';
-      if(href && href!=='#' && !href.startsWith('javascript:')){
-        try {if(new URL(href,location.href).origin!==location.origin) continue;}
-        catch(e){continue;}
-      }
-      window.__robinAccessAdStarted=true;
-      try{sessionStorage.setItem(key,String(Date.now()));}catch(e){}
-      button.click();
-      return 'started';
     }
+    // FarsiPlex sometimes attaches its click listener to a plain option card
+    // without role=button/onclick. Clicking the short, exact option label lets
+    // the browser bubble the event to that card; never click the whole dialog.
+    if(!button && el!==root && typeof el.click==='function') button=el;
+    if(!button || !root.contains(button) || !visible(button)) continue;
+    var href=button.getAttribute('href')||'';
+    if(href && href!=='#' && !href.startsWith('javascript:')){
+      try{if(new URL(href,location.href).origin!==location.origin) continue;}
+      catch(e){continue;}
+    }
+    state.attempted=true;
+    state.lastAttempt=now;
+    try{button.click();}catch(e){return 'manual-required';}
+    // A click() returning does NOT mean the provider accepted it.
+    return 'click-attempted';
   }
   return 'manual-required';
 })();
@@ -587,24 +607,142 @@ private const val playerAdCleaner = """
 })();
 """
 
-/** Keep only the site's legitimate playback surface visible in the embedded view.
- * Does not dismiss the provider unlock, click advertisements, or fabricate media URLs. */
+/** Make the final FarsiPlex page a dedicated player surface, not a website inside
+ * the player. We hide only site navigation / unrelated article content. The actual
+ * video, its Player 1/2/3 tabs, quality links and required access dialog stay live.
+ * FarsiPlex sometimes builds its header AFTER the document load, hence the observer. */
 private const val compactPlaybackScript = """
 (function(){
- if (window.__robinCompactPlayer) return;
- window.__robinCompactPlayer=true;
- var css = `
-   header.site-header, .site-header, .main-header, .header-menu,
-   footer.site-footer, .site-footer,
-   .sidebar, aside.widget-area,
-   .breadcrumb, .breadcrumbs {
-     display:none !important; max-height:0 !important;
-   }
-   html,body { scroll-behavior:smooth; }
- `;
- var style=document.createElement('style');
- style.id='robin-compact-player';style.textContent=css;
- (document.head || document.documentElement).appendChild(style);
+  if (window.__robinCompactPlayerInstalled) { window.__robinCleanPlayerPage(); return 'refreshed'; }
+  window.__robinCompactPlayerInstalled = true;
+  var style=document.createElement('style');
+  style.id='robin-final-player-only';
+  style.textContent=`
+    /* Hide the FarsiPlex website chrome; NOT the app's Back button. */
+    body > header, header[role="banner"], [role="banner"],
+    #header, #site-header, #masthead, #navbar,
+    .site-header, .main-header, .header-wrap, .header-area,
+    .header-main, .header-inner, .mobile-header, .mobile-nav,
+    .site-navigation, .main-navigation, .header-menu,
+    .navbar, .navbar-header, .navigation-bar,
+    .site-branding, .header-branding, .header-logo,
+    .site-logo, .menu-toggle, .nav-toggle, .search-toggle,
+    footer.site-footer, .site-footer, #colophon,
+    .breadcrumbs, .breadcrumb, aside.widget-area, .sidebar {
+      display:none!important; max-height:0!important; margin:0!important;
+      padding:0!important; overflow:hidden!important;
+    }
+    [data-robin-site-chrome="hidden"], [data-robin-unrelated="hidden"] {
+      display:none!important; max-height:0!important; margin:0!important;
+      padding:0!important; overflow:hidden!important;
+    }
+    html,body { scroll-behavior:auto!important; }
+    body { padding-top:0!important; }
+  `;
+  (document.head||document.documentElement).appendChild(style);
+  var danger='[role="dialog"],[aria-modal="true"],.modal,.modal-dialog,.unlock-modal,[class*="unlock"],[id*="unlock"]';
+  function containsPlayback(el){
+    if (!el) return false;
+    var text=(el.textContent||'').slice(0,9000);
+    return /video sources|player\s*1\s*player\s*2/i.test(text) ||
+      !!el.querySelector('video,[class*="jwplayer"],[id*="jwplayer"]');
+  }
+  function containsUnlock(el){
+    if(!el) return false;
+    if (el.matches(danger) || el.querySelector(danger)) return true;
+    var text=(el.textContent||'').slice(0,1700);
+    return /unlock more content/i.test(text) && /view a short ad/i.test(text);
+  }
+  function hide(el,kind){
+    if(!el || el===document.body || el===document.documentElement || containsUnlock(el) || containsPlayback(el)) return false;
+    el.setAttribute(kind==='article'?'data-robin-unrelated':'data-robin-site-chrome','hidden');
+    return true;
+  }
+  function nearTop(el){
+    var r=el.getBoundingClientRect();
+    return r.width>0 && r.height>0 && r.top<450 && r.bottom> -10;
+  }
+  function looksLikeSiteBrand(el){
+    var label=(el.getAttribute('alt')||'')+' '+(el.getAttribute('title')||'')+' '+
+      (el.getAttribute('aria-label')||'')+' '+(el.textContent||'').slice(0,90);
+    var cl=(String(el.className||'')+' '+(el.id||'')).toLowerCase();
+    var src=(el.getAttribute('src')||'').toLowerCase();
+    return /farsi\s*plex|فارسی\s*plex/i.test(label) ||
+      (/(logo|branding)/.test(cl) && /(farsi|logo)/.test(src+' '+label.toLowerCase()));
+  }
+  function cleanNavigation(){
+    /* The actual website sometimes uses a plain div for its top logo/menu/search
+       rather than the standard WordPress header classes. Find that row. */
+    var brands=document.querySelectorAll('img[alt],a[href], [class*="logo"],[class*="brand"], [id*="logo"]');
+    for(var i=0;i<brands.length;i++){
+      var logo=brands[i];
+      if (!nearTop(logo) || !looksLikeSiteBrand(logo)) continue;
+      var row=null, parent=logo;
+      for(var step=0;step<5 && parent && parent!==document.body;step++,parent=parent.parentElement){
+        var r=parent.getBoundingClientRect();
+        if(r.height>15 && r.height<230 && r.width>=Math.min(window.innerWidth*0.65,320) &&
+           r.top<450 && !containsPlayback(parent) && !containsUnlock(parent)) row=parent;
+      }
+      // If the site's toolbar has its own row, remove it as a unit; otherwise
+      // at least remove the logo itself (without removing the video container).
+      hide(row || logo,'chrome');
+    }
+    /* Independently hide menu/search affordances when the logo isn't an image. */
+    var triggers=document.querySelectorAll(
+      '.menu-toggle,.search-toggle,.mobile-menu-toggle,.navbar-toggle,'+
+      '.hamburger,.hamburger-menu,[aria-label*="menu" i],[aria-label*="search" i],'+
+      '[class*="header-search"],[class*="header-menu"],'+
+      'header form[role="search"], header input[type="search"]');
+    for(var j=0;j<triggers.length;j++){
+      var item=triggers[j];
+      if(!nearTop(item)) continue;
+      var container=item.closest('button,a,[role="button"]')||item;
+      hide(container,'chrome');
+    }
+    document.querySelectorAll('header,nav,[role="banner"],.site-header,.main-header').forEach(function(n){
+      var r=n.getBoundingClientRect();
+      if(r.top<450 && r.height<260) hide(n,'chrome');
+    });
+  }
+  function cleanArticles(){
+    /* FarsiPlex currently appends an unrelated movie-list article below the
+       real player/source list. Do not remove an article that owns the player. */
+    document.querySelectorAll('h1,h2,h3,h4').forEach(function(heading){
+      var title=(heading.textContent||'').trim();
+      if(!/^the 15 best iranian movies of all time/i.test(title)) return;
+      var section=heading.closest('article,.post,.blog-post,.entry-content,.post-content,.article-content');
+      if(section && hide(section,'article')) return;
+      // The site sometimes places this article in generic divs. Walk up to
+      // the largest dedicated article container, stopping BEFORE the player.
+      var candidate=heading, ancestor=heading.parentElement;
+      for(var depth=0;depth<6 && ancestor && ancestor!==document.body;depth++,ancestor=ancestor.parentElement){
+        if(containsPlayback(ancestor) || containsUnlock(ancestor)) break;
+        if((ancestor.textContent||'').length>22000) break;
+        candidate=ancestor;
+      }
+      hide(candidate,'article');
+    });
+  }
+  var cleaning=false;
+  window.__robinCleanPlayerPage=function(){
+    if(cleaning) return;
+    cleaning=true;
+    try { cleanNavigation(); cleanArticles(); } finally { cleaning=false; }
+  };
+  window.__robinCleanPlayerPage();
+  var scheduled=false, lastScan=Date.now();
+  var observer=new MutationObserver(function(){
+    if(scheduled) return;
+    scheduled=true;
+    // Player frameworks frequently modify the DOM. Throttle layout checks
+    // to avoid unnecessary CPU use and video stuttering on Fire TV.
+    var wait=Math.max(350,1500-(Date.now()-lastScan));
+    setTimeout(function(){
+      scheduled=false;lastScan=Date.now();window.__robinCleanPlayerPage();
+    },wait);
+  });
+  observer.observe(document.documentElement,{childList:true,subtree:true});
+  return 'installed';
 })();
 """
 
@@ -680,6 +818,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     var selectedPlayer by remember(url) { mutableStateOf("") }
     var selectedQuality by remember(url) { mutableStateOf("") }
     var playerMessage by remember(url) { mutableStateOf("Opening the final player…") }
+    var accessPromptActive by remember(url) { mutableStateOf(false) }
     // Cover every intermediate WebView page with an app-owned loading surface.
     // Revealing it on a timer was the cause of the unwanted preview flash.
     var showWebContent by remember(url) { mutableStateOf(false) }
@@ -699,44 +838,61 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
             webViewClient = object : WebViewClient() {
                 override fun onPageStarted(view: WebView?, pageUrl: String?, favicon: Bitmap?) {
                     super.onPageStarted(view, pageUrl, favicon)
-                    // Hide every document transition, including /play-quick-view/.
-                    // Never flash a preview while navigating to the final player.
-                    showWebContent = false
                     manualContinuation = false
                     lastCompletedPage = ""
-                    availablePlayers = emptyList()
-                    availableQualities = emptyList()
-                    playerMessage = "Opening the final player…"
+                    // Switching source/quality often reloads the SAME final page.
+                    // Do not put a blocking spinner over that real player.
+                    if (isFinalPlayerPage(pageUrl)) {
+                        showWebContent = true
+                        playerMessage = "Loading video source…"
+                    } else {
+                        showWebContent = false
+                        availablePlayers = emptyList()
+                        availableQualities = emptyList()
+                        playerMessage = "Opening the final player…"
+                    }
                 }
                 override fun onPageFinished(view: WebView?, loadedUrl: String?) {
                     super.onPageFinished(view, loadedUrl)
                     lastCompletedPage = loadedUrl.orEmpty()
                     val isFinal = isFinalPlayerPage(loadedUrl)
-                    view?.evaluateJavascript(playerAdCleaner) {
-                        view.evaluateJavascript(compactPlaybackScript) {
-                            // A user already requested playback. If an accessible
-                            // FarsiPlex offerwall is present, press ONLY its "View a
-                            // short ad" option to begin the required ad normally.
-                            view.evaluateJavascript(startRequiredAccessAdScript) { unlockRaw ->
-                                val unlock = unlockRaw.removeSurrounding("\"")
-                                if (unlock == "started" || unlock == "previously-triggered") {
-                                    showWebContent = true // The required ad must be viewable.
-                                    manualContinuation = false
-                                    playerMessage = "Required access ad started. Let it finish if shown."
-                                } else if (unlock == "manual-required") {
-                                    showWebContent = true
-                                    manualContinuation = false
-                                    playerMessage = "Tap View a short ad if the provider requires a real click."
-                                } else if (isFinal) {
-                                    showWebContent = true
-                                    manualContinuation = false
-                                    playerMessage = "Choose a player or quality if available"
-                                } else {
+                    if (view == null) return
+                    if (isFinal) {
+                        // Do NOT delay reaching the final player for cosmetic scripts.
+                        showWebContent = true
+                        manualContinuation = false
+                        playerMessage = "Choose player or video quality"
+                        view.evaluateJavascript(compactPlaybackScript, null)
+                        view.evaluateJavascript(playerAdCleaner, null)
+                    }
+                    // Probe for the required access dialog promptly on EVERY page.
+                    view.evaluateJavascript(startRequiredAccessAdScript) { raw ->
+                        val status = raw.removeSurrounding("\"")
+                        when (status) {
+                            "click-attempted", "click-pending" -> {
+                                accessPromptActive = true
+                                showWebContent = true
+                                manualContinuation = false
+                                playerMessage = "Opening the required access ad, if accepted…"
+                            }
+                            "still-visible", "manual-required", "cooldown" -> {
+                                accessPromptActive = true
+                                showWebContent = true
+                                manualContinuation = false
+                                playerMessage = "Tap View a short ad if the prompt remains."
+                            }
+                            else -> {
+                                if (status == "not-shown" && accessPromptActive) {
+                                    accessPromptActive = false
+                                    if (isFinal) playerMessage = "Choose player or video quality"
+                                }
+                                if (!isFinal) {
+                                    // Continue without waiting for cosmetic ad filtering.
                                     view.evaluateJavascript(followFinalPlayerScript) { result ->
-                                        val status = result.removeSurrounding("\"")
-                                        if (status == "unlock-required") {
+                                        if (result.removeSurrounding("\"") == "unlock-required") {
                                             showWebContent = true
-                                            playerMessage = "Completing FarsiPlex's required access step"
+                                            manualContinuation = false
+                                            playerMessage = "FarsiPlex requires an access step"
                                         }
                                     }
                                 }
@@ -757,37 +913,41 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     // A changed website may require a genuine click on its preview. Do not
     // automatically expose the preview after a few seconds; offer a fallback.
     LaunchedEffect(web) {
-        delay(11000)
+        delay(7000)
         if (!showWebContent) {
             manualContinuation = true
             playerMessage = "The website has not opened the final player yet"
         }
     }
-    // Episode options and site navigation can be inserted dynamically.
+    // Check newly inserted offerwalls after page load, and keep moving through
+    // information/preview pages until the real playback page appears. A new
+    // offerwall (e.g., after a quality change) receives its own single attempt.
     LaunchedEffect(web) {
         while (true) {
             val atFinal = isFinalPlayerPage(web.url)
-            // Site offerwalls are often injected *after* onPageFinished.
-            // The script itself enforces a single, rate-limited attempt.
-            web.evaluateJavascript(startRequiredAccessAdScript) { unlockRaw ->
-                when (unlockRaw.removeSurrounding("\"")) {
-                    "started", "previously-triggered" -> {
+            web.evaluateJavascript(startRequiredAccessAdScript) { raw ->
+                when (raw.removeSurrounding("\"")) {
+                    "click-attempted", "click-pending" -> {
+                        accessPromptActive = true
                         showWebContent = true
                         manualContinuation = false
-                        playerMessage = "Required access ad started. Let it finish if shown."
+                        playerMessage = "Opening the required access ad, if accepted…"
                     }
-                    "manual-required" -> {
+                    "still-visible", "manual-required", "cooldown" -> {
+                        accessPromptActive = true
                         showWebContent = true
                         manualContinuation = false
-                        playerMessage = "Tap View a short ad if FarsiPlex requires a real click."
+                        playerMessage = "Tap View a short ad if FarsiPlex requires a real touch."
                     }
-                    else -> {
-                        if (!atFinal) {
-                            web.evaluateJavascript(followFinalPlayerScript) { raw ->
-                                if (raw.removeSurrounding("\"") == "unlock-required") {
-                                    showWebContent = true
-                                    manualContinuation = false
-                                }
+                    "not-shown" -> {
+                        if (accessPromptActive) {
+                            accessPromptActive = false
+                            if (atFinal) playerMessage = "Choose player or video quality"
+                        }
+                        if (!atFinal) web.evaluateJavascript(followFinalPlayerScript) { result ->
+                            if (result.removeSurrounding("\"") == "unlock-required") {
+                                showWebContent = true
+                                manualContinuation = false
                             }
                         }
                     }
@@ -808,14 +968,17 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                     availablePlayers = players
                     availableQualities = qualities
                     if (players.isNotEmpty() || qualities.isNotEmpty()) {
-                        playerMessage = "Choose a source or quality below"
+                        // Do not overwrite a message about an outstanding unlock.
+                        if (!accessPromptActive) {
+                            playerMessage = "Choose a source or quality below"
+                        }
                         web.evaluateJavascript(focusAvailablePlayerScript(), null)
-                    } else {
-                        playerMessage = "Player loaded. Complete FarsiPlex's access step if shown."
                     }
                 }
             }
-            delay(2000)
+            // Faster discovery on intermediate pages; fewer probes once the
+            // real player is visible (to avoid unnecessary TV WebView work).
+            delay(if (atFinal) 1400L else 500L)
         }
     }
     DisposableEffect(web) { onDispose { web.stopLoading(); web.destroy() } }
