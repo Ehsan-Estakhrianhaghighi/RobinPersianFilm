@@ -158,6 +158,29 @@ private suspend fun readEpisodes(seriesUrl: String): List<EpisodeItem> = withCon
     found.values.sortedWith(compareBy(EpisodeItem::season, EpisodeItem::number))
 }
 
+/** Resolve only playback links explicitly published on the selected FarsiPlex title page.
+ * We do not manufacture access tokens, dismiss unlock prompts, or jump across providers.
+ * If the final playback link is created dynamically after authorization, retain the
+ * original page as a fallback. */
+private suspend fun resolvePublishedPlaybackPage(titlePage: String): String = withContext(Dispatchers.IO) {
+    if (!sameSite(titlePage)) return@withContext titlePage
+    try {
+        val doc = readPage(titlePage)
+        val candidates = doc.select("a[href], iframe[src]").mapNotNull { node ->
+            val link = if (node.tagName() == "iframe") node.absUrl("src") else node.absUrl("href")
+            if (!sameSite(link)) null else {
+                val path = URI(link).path.orEmpty().lowercase()
+                val label = (node.text() + " " + node.attr("title") + " " + node.className()).lowercase()
+                val isPlayback = path.contains("/play-quick-view") ||
+                    path.matches(Regex(".*/(watch|stream|play)(/.*)?")) ||
+                    (label.contains("watch now") && path.contains("/play/"))
+                if (isPlayback && link != titlePage) link else null
+            }
+        }
+        candidates.firstOrNull() ?: titlePage
+    } catch (_: Exception) { titlePage }
+}
+
 private class FarsiStore(context: android.content.Context) {
     private val prefs = context.getSharedPreferences("robinpersianfilm", 0)
     fun favorites(): Set<String> = prefs.getStringSet("favorites", emptySet())?.toSet() ?: emptySet()
@@ -189,6 +212,15 @@ private fun RobinApp() {
     var loading by remember { mutableStateOf(true) }
     var message by remember { mutableStateOf("") }
     var playerUrl by remember { mutableStateOf<String?>(null) }
+    var resolvingPlayer by remember { mutableStateOf(false) }
+    fun openPlayback(page: String) {
+        scope.launch {
+            resolvingPlayer = true
+            val destination = resolvePublishedPlaybackPage(page)
+            resolvingPlayer = false
+            playerUrl = destination
+        }
+    }
     var favorites by remember { mutableStateOf(store.favorites()) }
     var watched by remember { mutableStateOf(store.watched()) }
     fun closeDetails() { playerUrl = null; selected = null; chosenEpisode = null; episodeList = emptyList() }
@@ -263,10 +295,10 @@ private fun RobinApp() {
                                     if (chosenEpisode?.page == episode.page) Text("✓", color = accent)
                                 }
                             }
-                            item { Button(enabled = chosenEpisode != null, onClick = { chosenEpisode?.let { store.mark(it.page); watched = store.watched(); playerUrl = it.page } }) { Text("▶ Play selected episode") } }
+                            item { Button(onClick = { chosenEpisode?.let { store.mark(it.page); watched = store.watched(); openPlayback(it.page) } }, enabled = chosenEpisode != null && !resolvingPlayer) { Text(if (resolvingPlayer) "Opening player…" else "▶ Play selected episode") } }
                         }
                     } else {
-                        item { Button(onClick = { store.mark(item.page); watched = store.watched(); playerUrl = item.page }) { Text("▶ Play movie") } }
+                        item { Button(onClick = { store.mark(item.page); watched = store.watched(); openPlayback(item.page) }, enabled = !resolvingPlayer) { Text(if (resolvingPlayer) "Opening player…" else "▶ Play movie") } }
                     }
                     item { Text("Playback stays inside RobinPersianFilm. Complete a provider-required unlock if shown. Player and quality options appear as they become available.", color = Color.LightGray, fontSize = 13.sp) }
                     item { Spacer(Modifier.height(24.dp)) }
