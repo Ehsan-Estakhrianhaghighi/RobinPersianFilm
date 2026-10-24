@@ -362,68 +362,91 @@ private fun RobinApp() {
     }
 }
 
-/** When the title page publishes a SAME-SITE Play link to the final player,
- * follow the original element so its click handler can preserve title context.
- * Never click a generic preview/advertisement or interact with unlock dialogs.
- * The script does nothing when no explicit HQ-player link exists. */
+/** Advance through FarsiPlex's preview *after normal site authorization*.
+ * Both a title page and /play-quick-view/ are intermediate stages. V1.5
+ * mistakenly stopped at /play-quick-view/, which is not the video player.
+ * Click only first-party playback links / clearly identified media controls;
+ * never click the ad-unlock dialog or an unrelated advertisement. */
 private const val followFinalPlayerScript = """
 (function(){
   var path=(location.pathname||'').toLowerCase();
   if(path.indexOf('/play-hq-player/')===0) return 'final';
-  if(path.indexOf('/play-quick-view/')===0) return 'quick-view';
-  if(!/^\/(movie|episode)\//.test(path)) return 'other';
-  if(window.__robinFollowedFinalLink) return 'already-tried';
-  function isVisible(el){
-    var s=getComputedStyle(el), r=el.getBoundingClientRect();
-    return s.visibility!=='hidden' && s.display!=='none' && r.width>0 && r.height>0;
+  var quick=path.indexOf('/play-quick-view/')===0;
+  var title=/^\/(movie|episode)\//.test(path);
+  if(!quick && !title) return 'other';
+  function visible(el){
+    if(!el || !el.getBoundingClientRect) return false;
+    var r=el.getBoundingClientRect(), s=getComputedStyle(el);
+    return r.width>8 && r.height>8 && s.display!=='none' && s.visibility!=='hidden';
   }
-  // Never click a site's access/advertising unlock dialog automatically.
-  var dialogs=[...document.querySelectorAll('[role=dialog],.modal,.modal-dialog,.popup,.unlock-modal,[class*=unlock]')];
-  if(dialogs.some(function(el){
-    return isVisible(el) && /unlock more content|view a short ad|watch.*to unlock/i.test((el.textContent||'').slice(0,1000));
+  // Do not automate any gated advertising or content-access action.
+  var blocks=[...document.querySelectorAll('[role=dialog],.modal,.modal-dialog,.popup,.unlock-modal,[class*=unlock]')];
+  if(blocks.some(function(el){
+    return visible(el) && /unlock more content|view a short ad|watch.{0,35}to unlock/i.test((el.textContent||'').slice(0,1300));
   })) return 'unlock-required';
-  var links=[...document.querySelectorAll('a[href], [data-href], [data-url]')];
-  var candidates=links.filter(function(el){
+  // A single click per loaded document. Page transitions reset this flag.
+  if(window.__robinAutoPreviewAttempted) return 'waiting-for-navigation';
+  var blocked='[role=dialog],.modal,.popup,[class*=unlock],ins.adsbygoogle,.adsbygoogle,[class*=ad-banner]';
+  function safe(el){return visible(el) && !el.closest(blocked);}
+  function onSite(raw){
+    try { var u=new URL(raw, location.href); return u.origin===location.origin && u.protocol==='https:'; }
+    catch(e){return false;}
+  }
+  // Follow ORIGINAL elements to preserve FarsiPlex's selected-title/session context.
+  var links=[...document.querySelectorAll('a[href],button[data-href],[data-url],[data-href]')].filter(safe);
+  var linksToPlayer=links.filter(function(el){
     var raw=el.getAttribute('href')||el.getAttribute('data-href')||el.getAttribute('data-url')||'';
-    try {
-      var u=new URL(raw,location.href);
-      return u.origin===location.origin && /^\/play-(?:hq-player|quick-view)\/?$/i.test(u.pathname);
-    } catch(e) {return false;}
+    if(!onSite(raw)) return false;
+    var p=new URL(raw,location.href).pathname.toLowerCase();
+    return quick ? p.indexOf('/play-hq-player/')===0 : /^\/play-(hq-player|quick-view)\/?$/.test(p);
   });
-  if(candidates.length){
-    candidates.sort(function(a,b){
-      function score(n){
-        var t=((n.textContent||'')+' '+(n.className||'')+' '+(n.getAttribute('title')||'')).toLowerCase();
-        return (/(play|watch|video|movie)/.test(t)?2:0) + (n.closest('.poster,.cover,.play,.video,.movie')?1:0);
-      }
+  if(linksToPlayer.length){
+    linksToPlayer.sort(function(a,b){
+      function score(el){var t=((el.textContent||'')+' '+(el.className||'')+' '+(el.getAttribute('aria-label')||'')).toLowerCase();
+        return (/\b(play|watch|video)\b/.test(t)?3:0)+(el.closest('[class*=poster],[class*=player],[class*=video]')?2:0);}
       return score(b)-score(a);
     });
-    window.__robinFollowedFinalLink=true;
-    candidates[0].click(); // Original site handler retains selected title/session.
-    return 'following-final-link';
+    window.__robinAutoPreviewAttempted=true;
+    linksToPlayer[0].click();
+    return quick?'opening-final-player':'opening-playback-page';
   }
-  // Some FarsiPlex titles expose their final player only via a JavaScript
-  // Play overlay. Click ONLY a visible media-poster Play control on this title
-  // page, never an unknown ad or any element in an unlock dialog.
-  var buttons=[...document.querySelectorAll('a,button,[role=button],[onclick],.play-button,.play-btn,.btn-play')];
-  var previews=buttons.filter(function(el){
-    if(!isVisible(el) || el.closest('[role=dialog],.modal,.popup,.unlock-modal')) return false;
-    var raw=el.getAttribute('href')||'';
-    if(raw){
-      try{ var u=new URL(raw,location.href); if(u.origin!==location.origin) return false; }
-      catch(e){ return false; }
-    }
-    var name=((el.textContent||'')+' '+(el.className||'')+' '+(el.getAttribute('aria-label')||'')+' '+(el.getAttribute('title')||'')).toLowerCase().slice(0,120);
-    var isPlay=/\b(play|watch now|watch movie|play video)\b/.test(name);
-    var inPreview=!!el.closest('[class*=poster],[class*=preview],[class*=trailer],[class*=video],[class*=player],[class*=cover]');
-    return isPlay && inPreview;
+  // FarsiPlex's quick-view often has a big Play overlay on the poster, with
+  // no readable text. Locate the overlay or the play icon's clickable parent.
+  var selectors=[
+    'a.play','a[class*=play]','a[class*=watch]','button[class*=play]','button[class*=watch]','[role=button][class*=play]',
+    '[class*=play-overlay]','[class*=play-button]','[class*=play-btn]',
+    '[class*=watch-button]','[class*=video-play]','[class*=player-play]',
+    '[data-action*=play]','[aria-label*=Play]','[title*=Play]',
+    '[onclick*=play]','[onclick*=Play]'
+  ];
+  var nodes=[...document.querySelectorAll(selectors.join(','))];
+  // Include clickable parents of graphical (textless) Play symbols.
+  document.querySelectorAll('.fa-play,[class*=icon-play],svg[class*=play],i[class*=play]').forEach(function(icon){
+    var parent=icon.closest('a,button,[role=button],[onclick],[class*=play]');
+    if(parent) nodes.push(parent);
   });
-  if(previews.length){
-    window.__robinFollowedFinalLink=true;
-    previews[0].click();
-    return 'following-preview-play';
+  var candidates=[...new Set(nodes)].filter(function(el){
+    if(!safe(el)) return false;
+    var href=el.getAttribute('href')||'';
+    if(href && !onSite(href) && href!=='#' && href.indexOf('javascript:')!==0) return false;
+    var t=((el.textContent||'')+' '+(el.className||'')+' '+(el.id||'')+' '+(el.getAttribute('aria-label')||'')).toLowerCase().slice(0,240);
+    if(/advert|banner|sponsor|download|unlock|trailer|share/.test(t)) return false;
+    return /\bplay\b|play-|play_|-play|_play|watch|video/.test(t) || !!el.querySelector('.fa-play,[class*=icon-play],svg[class*=play]');
+  });
+  candidates.sort(function(a,b){
+    function score(el){
+      var r=el.getBoundingClientRect(), t=((el.className||'')+' '+(el.getAttribute('aria-label')||'')).toLowerCase();
+      return (el.closest('[class*=poster],[class*=preview],[class*=video],[class*=player],[class*=cover]')?8:0)
+       +(/play/.test(t)?3:0)+(r.width>50&&r.width<500?2:0);
+    }
+    return score(b)-score(a);
+  });
+  if(candidates.length){
+    window.__robinAutoPreviewAttempted=true;
+    candidates[0].click();
+    return quick?'opening-final-from-preview':'opening-preview';
   }
-  return 'no-published-final-link';
+  return quick?'preview-needs-tap':'title-needs-tap';
 })();
 """
 
@@ -549,7 +572,8 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     var availableQualities by remember(url) { mutableStateOf<List<String>>(emptyList()) }
     var selectedPlayer by remember(url) { mutableStateOf("") }
     var selectedQuality by remember(url) { mutableStateOf("") }
-    var playerMessage by remember(url) { mutableStateOf("Loading video options…") }
+    var playerMessage by remember(url) { mutableStateOf("Opening final player…") }
+    var showWebContent by remember(url) { mutableStateOf(false) }
     val web = remember(url) {
         WebView(context).apply {
             settings.javaScriptEnabled = true
@@ -566,7 +590,12 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                     super.onPageFinished(view, loadedUrl)
                     view?.evaluateJavascript(playerAdCleaner, null)
                     view?.evaluateJavascript(compactPlaybackScript, null)
-                    view?.evaluateJavascript(followFinalPlayerScript, null)
+                    view?.evaluateJavascript(followFinalPlayerScript) { result ->
+                        val status = result.removeSurrounding("\"")
+                        if (status == "final" || status == "unlock-required" || status == "other") {
+                            showWebContent = true
+                        }
+                    }
                 }
                 override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                     val target = request?.url ?: return false
@@ -578,12 +607,23 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
             loadUrl(url)
         }
     }
+    // Don't leave users on an indefinite loading screen when a provider blocks
+    // automated navigation or requires a real Play click. Show the page then.
+    LaunchedEffect(web) {
+        delay(6500)
+        showWebContent = true
+    }
     // Options can be inserted dynamically after the legitimate unlock step.
     LaunchedEffect(web) {
         while (true) {
             // Some sites inject their Play link after the initial page load.
             // Recheck; the JavaScript is idempotent and never clicks unlock ads.
-            web.evaluateJavascript(followFinalPlayerScript, null)
+            web.evaluateJavascript(followFinalPlayerScript) { raw ->
+                val status = raw.removeSurrounding("\"")
+                if (status == "final" || status == "unlock-required" || status == "other" || status.endsWith("needs-tap")) {
+                    showWebContent = true
+                }
+            }
             web.evaluateJavascript(findOptionsScript()) { raw ->
                 val decoded = raw.removeSurrounding("\"").replace("\\n", "")
                 val parts = decoded.split('|')
@@ -601,7 +641,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                 }
                 else playerMessage = if (web.url?.contains("/play-hq-player/") == true)
                     "Final player is loading. Complete any provider-required unlock if shown."
-                else "Finding the selected title's player. If it isn't published yet, use the site's Play link after any required unlock."
+                else "Opening the final player. If the preview stays visible, the provider may require one manual Play click."
             }
             delay(2000)
         }
@@ -654,7 +694,18 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                 }
                 Text(playerMessage, fontSize = 12.sp, color = Color.LightGray, maxLines = 2, modifier = Modifier.padding(bottom = 5.dp))
             }
-            AndroidView(factory = { web }, modifier = Modifier.fillMaxSize().weight(1f))
+            Box(Modifier.fillMaxSize().weight(1f)) {
+                AndroidView(factory = { web }, modifier = Modifier.fillMaxSize())
+                if (!showWebContent) {
+                    Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            CircularProgressIndicator(color = accent)
+                            Spacer(Modifier.height(12.dp))
+                            Text("Opening the video player…", color = Color.White)
+                        }
+                    }
+                }
+            }
         }
         customView?.let { view ->
             AndroidView(factory = { parent ->

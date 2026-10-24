@@ -1,20 +1,26 @@
-# RobinPersianFilm v1.2 — In-app player controls (experimental)
+# RobinPersianFilm v1.6 — preview-to-player navigation fix
 
-This is a separate Android/Fire TV app from PersianRobinFilm. The application label and cat logo are retained.
+This is a targeted update to v1.5.
 
 ## Changes
-- Playback remains inside the app, with an in-app player screen instead of opening an external browser.
-- When FarsiPlex exposes source tabs or quality links in the *same webpage DOM*, Player 1/2/3 and quality choices appear above the embedded page and can be selected from the app.
-- Available options are refreshed after website updates (including after a legitimate unlock).
-- Basic banner filtering and top-level redirect protection are retained.
-- Existing catalog, series episodes, favorites, and history remain unchanged.
 
-## Important limitations
-- This is **not yet native Media3/ExoPlayer playback**. It still embeds the provider's authorized WebView player.
-- FarsiPlex's legitimate 'View a short ad' 24-hour unlock step and any required pre-roll ads are not bypassed.
-- Some sources/quality controls are inside cross-origin iframe players. Android cannot access those controls through the outer page's JavaScript; select them in the provider when needed.
-- FarsiPlex may still require a click on its player after authorization. No automatic playback is guaranteed.
-- This source ZIP was validated structurally but NOT compiled or tested on a physical Fire Stick.
+- Fixed the playback automation stopping at `/play-quick-view/`, which is an intermediate preview and not the final player.
+- On either a movie/episode page or the intermediate quick-view, the app now tries to follow a same-origin link to the final `/play-hq-player/` page through the original page control, preserving the website's selected-title/session context.
+- Added recognition of visible graphical Play overlays that don't contain the word "Play" as ordinary text.
+- Shows a short “Opening the video player…” screen during automatic navigation; if the site cannot be advanced programmatically, reveals its page instead of trapping the user.
+- Continues to show the required FarsiPlex access-unlock dialog when applicable. It does not bypass access controls or required advertisements.
+- Preserves the catalogs, movie/episode selections, quality/player choices, launcher icon, and Fire TV support from v1.5.
+- Updated internal versionName to `1.6.0` (the visible app title has no version number).
 
-## GitHub update
-For existing RobinPersianFilm repository, replace `app/src/main/java/com/persianrubinfilm/app/MainActivity.kt` and `app/build.gradle.kts`. Keep `.github/workflows/android.yml` unchanged. Run GitHub Actions and review compiler logs.
+## Installation
+
+Replace only:
+
+- `app/src/main/java/com/persianrubinfilm/app/MainActivity.kt`
+- `app/build.gradle.kts`
+
+Your existing `.github/workflows/android.yml` is unchanged. Build APK via GitHub Actions.
+
+## Validation limits
+
+The JavaScript route and click selection passed local simulated tests (including /play-quick-view/ and unlock detection). A full Android build and real FarsiPlex playback test were not available in this environment. Some provider actions may reject programmatic clicks or require a real user gesture.
