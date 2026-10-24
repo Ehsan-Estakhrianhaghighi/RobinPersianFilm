@@ -454,31 +454,51 @@ private const val followFinalPlayerScript = """
  * An unlock wall is access control, not a removable popup. */
 private const val playerAdCleaner = """
 (function() {
-  if (window.__robinAdCleanerInstalled) return;
+  if (window.__robinAdCleanerInstalled) return 'already-installed';
   window.__robinAdCleanerInstalled = true;
-  var css = `
-    ins.adsbygoogle, .adsbygoogle, .google-auto-placed,
-    [id^="google_ads_"], [id^="div-gpt-ad"], [id*="google_ads_iframe"],
-    .ad-banner, .banner-ad, .advertisement, .adsense,
-    .ad-unit, .ad-slot, .advertising-banner,
-    iframe[src*="doubleclick.net"], iframe[src*="googlesyndication.com"],
-    iframe[src*="googleadservices.com"] {
-      display:none !important; visibility:hidden !important;
-      height:0 !important; min-height:0 !important; max-height:0 !important;
-      margin:0 !important; padding:0 !important;
-      pointer-events:none !important;
-    }
-  `;
-  function installStyle() {
-    if (document.getElementById('robin-ad-style')) return;
-    var el = document.createElement('style');
-    el.id = 'robin-ad-style'; el.textContent = css;
-    (document.head || document.documentElement).appendChild(el);
+  // Cosmetic ad filtering only. Leave the provider's 24-hour unlock and
+  // video-provider pre-roll untouched, or playback access may stop working.
+  var adNodeSelector = [
+    'ins.adsbygoogle', '.adsbygoogle', '.google-auto-placed',
+    '[id^="google_ads_"]', '[id^="div-gpt-ad"]', '[id^="google_ads_iframe"]',
+    '[data-ad-client]', '[data-ad-slot]', '[data-google-query-id]',
+    '.ad-banner', '.banner-ad', '.advertisement', '.adsense',
+    '.ad-unit', '.ad-slot', '.advertising-banner', '.ad-wrapper',
+    '.sticky-ad', '.floating-ad', '.top-banner', '.bottom-banner',
+    '.ezoic-ad', '.adthrive-ad'
+  ].join(',');
+  function protectedArea(el) {
+    return !!el.closest('[role="dialog"],.modal,.modal-dialog,.popup,.unlock-modal,[class*="unlock"],[id*="unlock"]');
   }
-  installStyle();
-  // Some banner containers are added after the page finishes loading.
-  var observer = new MutationObserver(installStyle);
-  observer.observe(document.documentElement, {childList:true, subtree:true});
+  function inVideoPlayer(el) {
+    return !!el.closest('video,[class*="video-player"],[id*="video-player"],[class*="jwplayer"],[id*="jwplayer"]');
+  }
+  function conceal(el) {
+    if (!el || protectedArea(el) || inVideoPlayer(el)) return;
+    el.style.setProperty('display','none','important');
+    el.style.setProperty('height','0','important');
+    el.style.setProperty('margin','0','important');
+  }
+  function cleanStandaloneBanners() {
+    document.querySelectorAll(adNodeSelector).forEach(conceal);
+    document.querySelectorAll('iframe[src]').forEach(function(frame){
+      if (protectedArea(frame) || inVideoPlayer(frame)) return;
+      var src=(frame.getAttribute('src')||'').toLowerCase();
+      if (!/doubleclick\.net|googlesyndication\.com|googleadservices\.com/.test(src)) return;
+      conceal(frame);
+      var container=frame.parentElement;
+      if(container && container.children.length===1 && !protectedArea(container) && !inVideoPlayer(container)) conceal(container);
+    });
+  }
+  cleanStandaloneBanners();
+  // Newly inserted banners should also be hidden without reloading the player.
+  var pending=false;
+  var observer=new MutationObserver(function(){
+    if(pending) return; pending=true;
+    requestAnimationFrame(function(){pending=false;cleanStandaloneBanners();});
+  });
+  observer.observe(document.documentElement, {childList:true,subtree:true});
+  return 'installed';
 })();
 """
 
@@ -492,10 +512,7 @@ private const val compactPlaybackScript = """
    header.site-header, .site-header, .main-header, .header-menu,
    footer.site-footer, .site-footer,
    .sidebar, aside.widget-area,
-   .breadcrumb, .breadcrumbs,
-   .top-banner, .sticky-ad, .floating-ad,
-   .ad-container, .ad-wrapper, .advertising,
-   [class*='google-auto-placed'], [class*='adsbygoogle'] {
+   .breadcrumb, .breadcrumbs {
      display:none !important; max-height:0 !important;
    }
    html,body { scroll-behavior:smooth; }
@@ -536,7 +553,7 @@ private fun focusAvailablePlayerScript(): String = """
 private fun findOptionsScript(): String = """
 (function(){
  function visible(x){return !!(x.getClientRects().length) && getComputedStyle(x).visibility !== 'hidden';}
- var nodes = [...document.querySelectorAll('button,a,[role=tab],li,.nav-link,.server-item,.source-item,[class*='player-tab'],[class*='quality-item']')].filter(visible);
+ var nodes = [...document.querySelectorAll('button,a,[role=tab],[role=button],li,.nav-link,.server-item,.source-item,[class*="player-tab"],[class*="quality-item"]')].filter(visible);
  var players=[], quality=[];
  nodes.forEach(function(n){
   var t=(n.textContent||'').trim().replace(/\s+/g,' ');
@@ -552,7 +569,7 @@ private fun selectOptionScript(kind: String, value: String): String {
     val wanted = if (kind == "player") "Player $safe" else safe
     return """(function(){
       var wanted='${wanted}';
-      var nodes=[...document.querySelectorAll('button,a,[role=tab],li,.nav-link,.server-item,.source-item,[class*='player-tab'],[class*='quality-item']')];
+      var nodes=[...document.querySelectorAll('button,a,[role=tab],[role=button],li,.nav-link,.server-item,.source-item,[class*="player-tab"],[class*="quality-item"]')];
       var n=nodes.find(function(el){
         var t=(el.textContent||'').trim().replace(/\s+/g,' ');
         return el.getClientRects().length && (t.toLowerCase() === wanted.toLowerCase() ||
@@ -561,6 +578,11 @@ private fun selectOptionScript(kind: String, value: String): String {
       if(n){n.click();return 'selected';}return 'unavailable';
     })();"""
 }
+
+private fun isFinalPlayerPage(url: String?): Boolean = try {
+    val path = URI(url.orEmpty()).path?.lowercase().orEmpty().trimEnd('/')
+    path == "/play-hq-player"
+} catch (_: Exception) { false }
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -572,8 +594,12 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     var availableQualities by remember(url) { mutableStateOf<List<String>>(emptyList()) }
     var selectedPlayer by remember(url) { mutableStateOf("") }
     var selectedQuality by remember(url) { mutableStateOf("") }
-    var playerMessage by remember(url) { mutableStateOf("Opening final player…") }
+    var playerMessage by remember(url) { mutableStateOf("Opening the final player…") }
+    // Cover every intermediate WebView page with an app-owned loading surface.
+    // Revealing it on a timer was the cause of the unwanted preview flash.
     var showWebContent by remember(url) { mutableStateOf(false) }
+    var manualContinuation by remember(url) { mutableStateOf(false) }
+    var lastCompletedPage by remember(url) { mutableStateOf("") }
     val web = remember(url) {
         WebView(context).apply {
             settings.javaScriptEnabled = true
@@ -586,62 +612,96 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
             isFocusable = true
             isFocusableInTouchMode = true
             webViewClient = object : WebViewClient() {
+                override fun onPageStarted(view: WebView?, pageUrl: String?, favicon: Bitmap?) {
+                    super.onPageStarted(view, pageUrl, favicon)
+                    // Hide every document transition, including /play-quick-view/.
+                    // Never flash a preview while navigating to the final player.
+                    showWebContent = false
+                    manualContinuation = false
+                    lastCompletedPage = ""
+                    availablePlayers = emptyList()
+                    availableQualities = emptyList()
+                    playerMessage = "Opening the final player…"
+                }
                 override fun onPageFinished(view: WebView?, loadedUrl: String?) {
                     super.onPageFinished(view, loadedUrl)
-                    view?.evaluateJavascript(playerAdCleaner, null)
-                    view?.evaluateJavascript(compactPlaybackScript, null)
-                    view?.evaluateJavascript(followFinalPlayerScript) { result ->
-                        val status = result.removeSurrounding("\"")
-                        if (status == "final" || status == "unlock-required" || status == "other") {
-                            showWebContent = true
+                    lastCompletedPage = loadedUrl.orEmpty()
+                    val isFinal = isFinalPlayerPage(loadedUrl)
+                    view?.evaluateJavascript(playerAdCleaner) {
+                        view.evaluateJavascript(compactPlaybackScript) {
+                            if (isFinal) {
+                                // Reveal only after the final document has loaded and
+                                // its cosmetic banner rules have been installed.
+                                showWebContent = true
+                                manualContinuation = false
+                                playerMessage = "Choose a player or quality if available"
+                            } else {
+                                view.evaluateJavascript(followFinalPlayerScript) { result ->
+                                    val status = result.removeSurrounding("\"")
+                                    if (status == "unlock-required") {
+                                        // Never skip site-required 24-hour access steps.
+                                        showWebContent = true
+                                        playerMessage = "Complete FarsiPlex's required access step to play"
+                                    }
+                                }
+                            }
                         }
                     }
                 }
                 override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                     val target = request?.url ?: return false
-                    // Allow site navigation and embedded media; prevent unrelated TOP-LEVEL ads.
                     val hostname = target.host?.lowercase() ?: return true
+                    // Keep top-level redirects to unrelated advertising websites blocked.
                     return request.isForMainFrame && hostname != "farsiplex.com" && hostname != "www.farsiplex.com"
                 }
             }
             loadUrl(url)
         }
     }
-    // Don't leave users on an indefinite loading screen when a provider blocks
-    // automated navigation or requires a real Play click. Show the page then.
+    // A changed website may require a genuine click on its preview. Do not
+    // automatically expose the preview after a few seconds; offer a fallback.
     LaunchedEffect(web) {
-        delay(6500)
-        showWebContent = true
+        delay(11000)
+        if (!showWebContent) {
+            manualContinuation = true
+            playerMessage = "The website has not opened the final player yet"
+        }
     }
-    // Options can be inserted dynamically after the legitimate unlock step.
+    // Episode options and site navigation can be inserted dynamically.
     LaunchedEffect(web) {
         while (true) {
-            // Some sites inject their Play link after the initial page load.
-            // Recheck; the JavaScript is idempotent and never clicks unlock ads.
-            web.evaluateJavascript(followFinalPlayerScript) { raw ->
-                val status = raw.removeSurrounding("\"")
-                if (status == "final" || status == "unlock-required" || status == "other" || status.endsWith("needs-tap")) {
-                    showWebContent = true
+            val atFinal = isFinalPlayerPage(web.url)
+            if (!atFinal) {
+                // A single attempt per document, never at the access-unlock gate.
+                web.evaluateJavascript(followFinalPlayerScript) { raw ->
+                    val status = raw.removeSurrounding("\"")
+                    if (status == "unlock-required") {
+                        showWebContent = true
+                        manualContinuation = false
+                        playerMessage = "Complete FarsiPlex's required access step to play"
+                    }
                 }
+            } else if (lastCompletedPage.isNotBlank() && isFinalPlayerPage(lastCompletedPage)) {
+                showWebContent = true
+                manualContinuation = false
             }
-            web.evaluateJavascript(findOptionsScript()) { raw ->
-                val decoded = raw.removeSurrounding("\"").replace("\\n", "")
-                val parts = decoded.split('|')
-                // evaluateJavascript returns literal 'null' until the document is ready.
-                // Never display the erroneous 'Player null' option.
-                val players = parts.getOrNull(0)?.split(',')?.filter { it.matches(Regex("[1-9]")) }.orEmpty()
-                val qualities = parts.getOrNull(1)?.split(',')?.filter {
-                    it in setOf("360", "480", "720", "1080", "1440", "2160")
-                }.orEmpty()
-                availablePlayers = players
-                availableQualities = qualities
-                if (players.isNotEmpty() || qualities.isNotEmpty()) {
-                    playerMessage = "Choose a source or quality below"
-                    web.evaluateJavascript(focusAvailablePlayerScript(), null)
+            if (atFinal && showWebContent) {
+                web.evaluateJavascript(findOptionsScript()) { raw ->
+                    val decoded = raw.removeSurrounding("\"").replace("\\n", "")
+                    val parts = decoded.split('|')
+                    val players = parts.getOrNull(0)?.split(',')?.filter { it.matches(Regex("[1-9]")) }.orEmpty()
+                    val qualities = parts.getOrNull(1)?.split(',')?.filter {
+                        it in setOf("360", "480", "720", "1080", "1440", "2160")
+                    }.orEmpty()
+                    availablePlayers = players
+                    availableQualities = qualities
+                    if (players.isNotEmpty() || qualities.isNotEmpty()) {
+                        playerMessage = "Choose a source or quality below"
+                        web.evaluateJavascript(focusAvailablePlayerScript(), null)
+                    } else {
+                        playerMessage = "Player loaded. Complete FarsiPlex's access step if shown."
+                    }
                 }
-                else playerMessage = if (web.url?.contains("/play-hq-player/") == true)
-                    "Final player is loading. Complete any provider-required unlock if shown."
-                else "Opening the final player. If the preview stays visible, the provider may require one manual Play click."
             }
             delay(2000)
         }
@@ -702,6 +762,14 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                             CircularProgressIndicator(color = accent)
                             Spacer(Modifier.height(12.dp))
                             Text("Opening the video player…", color = Color.White)
+                            if (manualContinuation) {
+                                Spacer(Modifier.height(10.dp))
+                                Text("The provider may require a manual step.", color = Color.LightGray)
+                                Spacer(Modifier.height(8.dp))
+                                OutlinedButton(onClick = { showWebContent = true }) {
+                                    Text("Show provider page to continue")
+                                }
+                            }
                         }
                     }
                 }

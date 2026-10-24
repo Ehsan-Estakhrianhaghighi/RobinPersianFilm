@@ -1,26 +1,32 @@
-# RobinPersianFilm v1.6 — preview-to-player navigation fix
+# RobinPersianFilm v1.7 — seamless transition and banner cleanup
 
-This is a targeted update to v1.5.
+A focused update based on v1.6. Keep the existing GitHub Actions workflow.
 
 ## Changes
 
-- Fixed the playback automation stopping at `/play-quick-view/`, which is an intermediate preview and not the final player.
-- On either a movie/episode page or the intermediate quick-view, the app now tries to follow a same-origin link to the final `/play-hq-player/` page through the original page control, preserving the website's selected-title/session context.
-- Added recognition of visible graphical Play overlays that don't contain the word "Play" as ordinary text.
-- Shows a short “Opening the video player…” screen during automatic navigation; if the site cannot be advanced programmatically, reveals its page instead of trapping the user.
-- Continues to show the required FarsiPlex access-unlock dialog when applicable. It does not bypass access controls or required advertisements.
-- Preserves the catalogs, movie/episode selections, quality/player choices, launcher icon, and Fire TV support from v1.5.
-- Updated internal versionName to `1.6.0` (the visible app title has no version number).
+- The intermediate `/play-quick-view/` page stays *behind an app loading screen* while FarsiPlex transitions to the final `/play-hq-player/` page. The old 6.5-second forced reveal has been removed.
+- If the provider does not advance automatically after 11 seconds, the app offers an **explicit** "Show provider page to continue" fallback, rather than automatically showing the preview.
+- The final player is shown after its document finishes loading and cosmetic ad cleanup has been applied.
+- Adds cosmetic filtering for common standalone banner advertisements and top/floating ads, including dynamically inserted banners.
+- **The required “View a short ad / Site-wide access for 24 hours” prompt is intentionally not removed or bypassed.** Provider-required pre-roll ads may also remain. They control access to content and may be necessary for playback to work.
+- Fixes two JavaScript quoting errors that could prevent in-app Player 1/2/3 and quality choices from being detected or selected.
+- Retains the catalogs, episode selection, video host options, cat launcher icon, and Fire Stick support.
+- Android versionCode 8, versionName 1.7.0; visible app title remains RobinPersianFilm.
 
-## Installation
+## Apply to your existing GitHub repository
 
-Replace only:
+Extract `RobinPersianFilm-v1.7-Changed-Files.zip` and update only:
 
 - `app/src/main/java/com/persianrubinfilm/app/MainActivity.kt`
 - `app/build.gradle.kts`
 
-Your existing `.github/workflows/android.yml` is unchanged. Build APK via GitHub Actions.
+The `.github/workflows/android.yml` file is unchanged. Build the APK with your normal GitHub Actions workflow.
 
-## Validation limits
+## Validation performed
 
-The JavaScript route and click selection passed local simulated tests (including /play-quick-view/ and unlock detection). A full Android build and real FarsiPlex playback test were not available in this environment. Some provider actions may reject programmatic clicks or require a real user gesture.
+- Parsed and checked the embedded playback JavaScript with Node.js.
+- Passed simulated preview/final-player navigation cases inherited from v1.6.
+- Passed a cosmetic-filter test verifying that recognizable standalone ads are hidden while a required unlock dialog and video-player elements remain accessible.
+- Verified ZIP archives and source version strings.
+
+**Not performed:** A full Android compilation or an end-to-end phone/Fire Stick playback test. FarsiPlex may change its site structure or require user interaction for the access step.
