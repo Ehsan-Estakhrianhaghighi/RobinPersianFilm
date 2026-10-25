@@ -1082,6 +1082,17 @@ private fun selectOptionScript(kind: String, value: String): String {
 
 private data class NativeVideoSource(val label: String, val url: String, val quality: String)
 
+/** Resolutions of the same media file share one source entry. */
+private fun nativeSourceGroupKey(source: NativeVideoSource): String = try {
+    val uri = URI(source.url)
+    val basePath = uri.path.orEmpty().replace(
+        Regex("""[.-](360|480|720|1080|1440|2160)(?=\.mp4$)""", RegexOption.IGNORE_CASE),
+        "-quality"
+    )
+    "${uri.host}$basePath"
+} catch (_: Exception) { source.url }
+
+
 /** Check whether a filename-based quality variant is actually served for the
  * currently authorized request. The original signed URL is reused unchanged
  * except for the filename; invalid/expired signatures are rejected by the host.
@@ -1533,12 +1544,19 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                 if (nativeSources.isNotEmpty()) {
                     Text("Video options", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
                     val groupedSources = nativeSources.distinctBy { it.url }
+                    val sourceGroups = groupedSources.groupBy(::nativeSourceGroupKey)
+                    val activeGroup = nativeChoice?.let(::nativeSourceGroupKey)
+                    val displayedQualities = sourceGroups[activeGroup]
+                        ?: sourceGroups.values.firstOrNull().orEmpty()
                     Text("Available sources", color = Color.LightGray, fontSize = 12.sp)
                     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-                        groupedSources.forEachIndexed { index, candidate ->
+                        sourceGroups.entries.forEachIndexed { index, entry ->
+                            val candidate = entry.value.firstOrNull { it.quality == nativeChoice?.quality }
+                                ?: entry.value.first()
                             TextButton(onClick = { nativeChoice = candidate }) {
-                                Text("${if (nativeChoice?.url == candidate.url) "✓ " else ""}Source ${index + 1}",
-                                    color = if (nativeChoice?.url == candidate.url) Color.White else accent)
+                                val chosen = activeGroup == entry.key
+                                Text("${if (chosen) "✓ " else ""}Source ${index + 1}",
+                                    color = if (chosen) Color.White else accent)
                             }
                         }
                         availablePlayers.forEach { number ->
@@ -1549,14 +1567,14 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                     }
                     Text("Quality", color = Color.LightGray, fontSize = 12.sp)
                     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-                        groupedSources.distinctBy { it.quality }.forEach { candidate ->
+                        displayedQualities.distinctBy { it.quality }.forEach { candidate ->
                             val qualityLabel = if (candidate.quality == "Auto") "Auto" else "${candidate.quality}p"
                             TextButton(onClick = { nativeChoice = candidate }) {
                                 Text("${if (nativeChoice?.quality == candidate.quality) "✓ " else ""}$qualityLabel",
                                     color = if (nativeChoice?.quality == candidate.quality) Color.White else accent)
                             }
                         }
-                        availableQualities.filter { quality -> groupedSources.none { it.quality == quality } }.forEach { quality ->
+                        availableQualities.filter { quality -> displayedQualities.none { it.quality == quality } }.forEach { quality ->
                             TextButton(onClick = { chooseProviderOption("quality", quality) }) {
                                 Text("${quality}p · check", color = accent)
                             }
@@ -1565,7 +1583,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                     if (checkingQualityVariants) {
                         Text("Checking whether 720p or 1080p is available for this episode…",
                             color = Color.LightGray, fontSize = 12.sp)
-                    } else if (availableQualities.isEmpty() && groupedSources.distinctBy { it.quality }.size == 1) {
+                    } else if (availableQualities.isEmpty() && displayedQualities.distinctBy { it.quality }.size == 1) {
                         Text("Only confirmed streams are playable directly; other website options must be requested.",
                             color = Color.LightGray, fontSize = 12.sp)
                     }
