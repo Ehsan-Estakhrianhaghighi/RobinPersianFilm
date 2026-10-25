@@ -1130,6 +1130,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     var selectedQuality by remember(url) { mutableStateOf("") }
     var nativeSources by remember(url) { mutableStateOf<List<NativeVideoSource>>(emptyList()) }
     var nativeChoice by remember(url) { mutableStateOf<NativeVideoSource?>(null) }
+    var requestProviderQuality by remember(url) { mutableStateOf(false) }
     var playerMessage by remember(url) { mutableStateOf("Opening the final player…") }
     val nativePlayer = remember(url) { ExoPlayer.Builder(context).build() }
     DisposableEffect(nativePlayer) {
@@ -1397,7 +1398,20 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
             delay(if (atFinal) 1400L else 500L)
         }
     }
-    DisposableEffect(web) { onDispose { web.stopLoading(); web.destroy() } }
+    // ExoPlayer and a hidden WebView must never play sound simultaneously.
+    // Retain the authorized browser session for changing source/quality later.
+    LaunchedEffect(nativeChoice, web) {
+        if (nativeChoice != null) {
+            web.evaluateJavascript(
+                """(function(){document.querySelectorAll('video,audio').forEach(function(m){try{m.pause();m.muted=true;}catch(e){}});})();""",
+                null
+            )
+            web.onPause()
+        } else {
+            web.onResume()
+        }
+    }
+    DisposableEffect(web) { onDispose { web.stopLoading(); web.onPause(); web.destroy() } }
     BackHandler(customView != null) {
         customCallback?.onCustomViewHidden(); customView = null; customCallback = null
     }
@@ -1423,10 +1437,20 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                         nativeSources.forEachIndexed { index, candidate ->
                             TextButton(onClick = { nativeChoice = candidate }) {
                                 val display = candidate.label.take(20).ifBlank { "Source ${index + 1}" }
-                                Text("${if (nativeChoice?.url == candidate.url) "✓ " else ""}$display · ${candidate.quality}", color = Color.White)
+                                val resolution = if (candidate.quality == "Auto") "Auto" else "${candidate.quality}p"
+                                Text("${if (nativeChoice?.url == candidate.url) "✓ " else ""}$display · $resolution", color = Color.White)
                             }
                         }
-                        if (nativeChoice != null) {
+                    }
+                    if (nativeChoice != null) {
+                        Text("Quality: ${nativeChoice?.quality?.let { if (it == "Auto") it else "${it}p" } ?: "Auto"} · Only verified sources shown",
+                            color = Color.LightGray, fontSize = 12.sp)
+                        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                            TextButton(onClick = {
+                                requestProviderQuality = true
+                                nativeChoice = null
+                                playerMessage = "Select another quality or Player 1/2/3 on the provider page, then start the video."
+                            }) { Text("Change quality / player") }
                             TextButton(onClick = { nativeChoice = null }) { Text("Website player") }
                         }
                     }
