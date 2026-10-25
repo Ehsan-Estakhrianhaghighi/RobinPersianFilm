@@ -971,10 +971,10 @@ private const val scrollToVideoSourcesScript = """
  * class names. Re-run after dynamic insertions, without removing media nodes. */
 private const val isolateFinalPlayerScript = """
 (function(){
-  if(!/\\/play-hq-player\\/?$/.test(location.pathname))return 'other-page';
+  if(location.pathname.indexOf('/play-hq-player')!==0)return 'other-page';
   var visible=function(el){if(!el)return false;var r=el.getBoundingClientRect();return r.width>15&&r.height>10;};
   var labels=[...document.querySelectorAll('button,a,[role="tab"],[role="button"],li,span,div')];
-  var tab=labels.find(function(el){return visible(el)&&/^player\\s*1$/i.test((el.textContent||'').trim());});
+  var tab=labels.find(function(el){return visible(el)&&(el.textContent||'').trim().toLowerCase()==='player 1';});
   if(!tab)return 'tabs-loading';
   var tabs=['player 1','player 2','player 3'];
   var group=tab;
