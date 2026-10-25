@@ -1130,6 +1130,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     var selectedQuality by remember(url) { mutableStateOf("") }
     var nativeSources by remember(url) { mutableStateOf<List<NativeVideoSource>>(emptyList()) }
     var nativeChoice by remember(url) { mutableStateOf<NativeVideoSource?>(null) }
+    var playerMessage by remember(url) { mutableStateOf("Opening the final player…") }
     val nativePlayer = remember(url) { ExoPlayer.Builder(context).build() }
     DisposableEffect(nativePlayer) {
         val listener = object : Player.Listener {
@@ -1152,7 +1153,6 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
             nativePlayer.stop()
         }
     }
-    var playerMessage by remember(url) { mutableStateOf("Opening the final player…") }
     var accessPromptActive by remember(url) { mutableStateOf(false) }
     // Cover every intermediate WebView page with an app-owned loading surface.
     // Revealing it on a timer was the cause of the unwanted preview flash.
