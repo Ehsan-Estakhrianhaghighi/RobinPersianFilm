@@ -655,140 +655,153 @@ private const val playerAdCleaner = """
  * FarsiPlex sometimes builds its header AFTER the document load, hence the observer. */
 private const val compactPlaybackScript = """
 (function(){
-  if(location.pathname.replace(/\/+$/,'')!=='/play-hq-player') return 'not-final';
-  if(window.__robinPlayerOnlyInstalled) { return window.__robinPlayerOnlyClean(); }
-  window.__robinPlayerOnlyInstalled=true;
+  if (window.__robinCompactPlayerInstalled) { window.__robinCleanPlayerPage(); return 'refreshed'; }
+  window.__robinCompactPlayerInstalled = true;
   var style=document.createElement('style');
-  style.id='robin-player-only-css';
+  style.id='robin-final-player-only';
   style.textContent=`
-    [data-robin-pruned="yes"] { display:none!important; visibility:hidden!important;
-      height:0!important; max-height:0!important; min-height:0!important;
-      margin:0!important; padding:0!important; border:0!important; }
-    html,body { overflow-y:auto!important; touch-action:pan-y!important;
-      overscroll-behavior-y:auto!important; scroll-behavior:auto!important; }
-    body { padding-top:0!important; margin-top:0!important; }
+    /* Hide the FarsiPlex website chrome; NOT the app's Back button. */
+    body > header, header[role="banner"], [role="banner"],
+    #header, #site-header, #masthead, #navbar,
+    .site-header, .main-header, .header-wrap, .header-area,
+    .header-main, .header-inner, .mobile-header, .mobile-nav,
+    .site-navigation, .main-navigation, .header-menu,
+    .navbar, .navbar-header, .navigation-bar,
+    .site-branding, .header-branding, .header-logo,
+    .site-logo, .custom-logo-link, .logo-area, .logo-container,
+    .menu-toggle, .nav-toggle, .search-toggle, .hamburger,
+    .mobile-menu, .header-search, .header-menu,
+    footer.site-footer, .site-footer, #colophon,
+    .breadcrumbs, .breadcrumb, aside.widget-area, .sidebar {
+      display:none!important; max-height:0!important; margin:0!important;
+      padding:0!important; overflow:hidden!important;
+    }
+    [data-robin-site-chrome="hidden"], [data-robin-unrelated="hidden"] {
+      display:none!important; max-height:0!important; margin:0!important;
+      padding:0!important; overflow:hidden!important;
+    }
+    html,body { scroll-behavior:auto!important; }
+    body { padding-top:0!important; }
   `;
   (document.head||document.documentElement).appendChild(style);
-  function txt(el){return (el.textContent||'').replace(/\s+/g,' ').trim();}
-  function shown(el){if(!el || !el.getBoundingClientRect)return false;
-    var r=el.getBoundingClientRect(),st=getComputedStyle(el);
-    return r.width>12&&r.height>8&&st.display!=='none'&&st.visibility!=='hidden';}
-  function isUnlock(el){
-    if(!el||!el.querySelectorAll)return false;
-    // Do not prune or block FarsiPlex's required access prompt, including an
-    // unlock dialogue dynamically mounted outside the website's player panel.
-    var sel='[role="dialog"],[aria-modal="true"],.modal,.modal-dialog,[class*="unlock"],[id*="unlock"]';
-    var nodes=[];
-    if(el.matches&&el.matches(sel)) nodes.push(el);
-    el.querySelectorAll(sel).forEach(function(n){nodes.push(n);});
-    return nodes.some(function(n){var t=txt(n).toLowerCase();
-      return t.indexOf('unlock more content')>=0&&t.indexOf('view a short ad')>=0;});
+  var danger='[role="dialog"],[aria-modal="true"],.modal,.modal-dialog,.unlock-modal,[class*="unlock"],[id*="unlock"]';
+  function containsPlayback(el){
+    if (!el) return false;
+    var text=(el.textContent||'').slice(0,9000);
+    return /video sources|player\s*1\s*player\s*2/i.test(text) ||
+      !!el.querySelector('video,[class*="jwplayer"],[id*="jwplayer"]');
   }
-  function prune(el){
-    if(!el||!el.matches||el===document.body||el===document.documentElement)return;
-    if(el.matches('script,style,noscript,link,meta'))return;
-    if(isUnlock(el))return;
-    el.setAttribute('data-robin-pruned','yes');
+  function containsUnlock(el){
+    if(!el) return false;
+    if (el.matches(danger) || el.querySelector(danger)) return true;
+    var text=(el.textContent||'').slice(0,1700);
+    return /unlock more content/i.test(text) && /view a short ad/i.test(text);
   }
-  function exactControl(label){
-    var nodes=document.querySelectorAll('button,a,[role="tab"],[role="button"],li,span,div');
-    for(var i=0;i<nodes.length;i++){
-      var n=nodes[i];
-      if(shown(n)&&txt(n).toLowerCase()===label.toLowerCase()) return n;
-    }
-    return null;
+  function hide(el,kind){
+    if(!el || el===document.body || el===document.documentElement || containsUnlock(el) || containsPlayback(el)) return false;
+    el.setAttribute(kind==='article'?'data-robin-unrelated':'data-robin-site-chrome','hidden');
+    return true;
   }
-  function tabsContainer(first,second){
-    var node=first;
-    for(var i=0;i<6&&node&&node!==document.body;i++,node=node.parentElement){
-      if(node.contains(second)&&txt(node).length<550){
-        var r=node.getBoundingClientRect();
-        if(r.height>20&&r.height<380)return node;
+  function nearTop(el){
+    var r=el.getBoundingClientRect();
+    return r.width>0 && r.height>0 && r.top<450 && r.bottom> -10;
+  }
+  function looksLikeSiteBrand(el){
+    var label=(el.getAttribute('alt')||'')+' '+(el.getAttribute('title')||'')+' '+
+      (el.getAttribute('aria-label')||'')+' '+(el.textContent||'').slice(0,90);
+    var cl=(String(el.className||'')+' '+(el.id||'')).toLowerCase();
+    var src=(el.getAttribute('src')||'').toLowerCase();
+    return /farsi\s*plex|فارسی\s*plex/i.test(label) ||
+      (/(logo|branding)/.test(cl) && /(farsi|logo)/.test(src+' '+label.toLowerCase()));
+  }
+  function cleanNavigation(){
+    /* The actual website sometimes uses a plain div for its top logo/menu/search
+       rather than the standard WordPress header classes. Find that row. */
+    var brands=document.querySelectorAll('img[alt],a[href], [class*="logo"],[class*="brand"], [id*="logo"]');
+    for(var i=0;i<brands.length;i++){
+      var logo=brands[i];
+      if (!nearTop(logo) || !looksLikeSiteBrand(logo)) continue;
+      var row=null, parent=logo;
+      for(var step=0;step<5 && parent && parent!==document.body;step++,parent=parent.parentElement){
+        var r=parent.getBoundingClientRect();
+        if(r.height>15 && r.height<230 && r.width>=Math.min(window.innerWidth*0.65,320) &&
+           r.top<450 && !containsPlayback(parent) && !containsUnlock(parent)) row=parent;
       }
+      // If the site's toolbar has its own row, remove it as a unit; otherwise
+      // at least remove the logo itself (without removing the video container).
+      hide(row || logo,'chrome');
     }
-    // Do not guess an ancestor: the fallback must never hide Player 2/3.
-    return null;
-  }
-  // Prune siblings BEFORE the real player-tabs row at each ancestor level.
-  // Unlike generic ad filters, this also removes ad wrappers that do not
-  // advertise themselves with CSS classes (including nested banner slots).
-  function pruneBefore(node){
-    var cur=node;
-    for(var depth=0;depth<16&&cur&&cur!==document.body;depth++,cur=cur.parentElement){
-      var parent=cur.parentElement;
-      if(!parent)break;
-      for(var n=parent.firstElementChild;n&&n!==cur;n=n.nextElementSibling) prune(n);
-    }
-  }
-  function pruneAfter(node){
-    var cur=node;
-    for(var depth=0;depth<16&&cur&&cur!==document.body;depth++,cur=cur.parentElement){
-      for(var n=cur.nextElementSibling;n;n=n.nextElementSibling) prune(n);
-    }
-  }
-  function activeUnlock(){
-    var sel='[role="dialog"],[aria-modal="true"],.modal,.modal-dialog,[class*="unlock"],[id*="unlock"]';
-    return Array.from(document.querySelectorAll(sel)).some(function(el){
-      var t=txt(el).toLowerCase();
-      return shown(el)&&t.includes('unlock more content')&&t.includes('view a short ad');
-    });
-  }
-  function unstickScroll(){
-    // An invisible unlock element often remains in the DOM after the popup
-    // closes. Its mere existence must NOT keep the document scroll-locked.
-    if(activeUnlock())return;
-    for(var root of [document.documentElement,document.body]){
-      if(!root)continue;
-      root.style.setProperty('overflow-y','auto','important');
-      root.style.setProperty('touch-action','pan-y','important');
-      if(getComputedStyle(root).position==='fixed')
-        root.style.setProperty('position','static','important');
-    }
-    document.querySelectorAll('[style*="overflow: hidden"],[style*="overflow:hidden"],[style*="overflow-y: hidden"]').forEach(function(el){
-      if(el===document.body||el===document.documentElement)return;
-      if(isUnlock(el))return;
-      if(el.scrollHeight>el.clientHeight+20){
-        el.style.setProperty('overflow-y','auto','important');
-        el.style.setProperty('touch-action','pan-y','important');
+    /* Sometimes the logo is a background image and has no alt/title.
+       Hide the site-home link near the top, but never the player/quality row. */
+    document.querySelectorAll('a[href],img[src],input[type="search"]').forEach(function(el){
+      if(!nearTop(el))return;
+      var raw=((el.getAttribute('href')||'')+' '+(el.getAttribute('src')||'')+' '+
+        (el.getAttribute('alt')||'')+' '+(el.className||'')).toLowerCase();
+      var siteHome=false;
+      try{var u=new URL(el.getAttribute('href')||'#',location.href);
+        siteHome=u.hostname===location.hostname && (u.pathname==='/'||u.pathname==='/explore/');}
+      catch(e){}
+      if(siteHome || /farsiplex.*logo|logo.*farsiplex|فارسی.*plex/.test(raw)){
+        var parent=el.closest('a')||el;
+        hide(parent,'chrome');
       }
     });
+    /* Independently hide menu/search affordances when the logo isn't an image. */
+    var triggers=document.querySelectorAll(
+      '.menu-toggle,.search-toggle,.mobile-menu-toggle,.navbar-toggle,'+
+      '.hamburger,.hamburger-menu,[aria-label*="menu" i],[aria-label*="search" i],'+
+      '[class*="header-search"],[class*="header-menu"],'+
+      'header form[role="search"], header input[type="search"]');
+    for(var j=0;j<triggers.length;j++){
+      var item=triggers[j];
+      if(!nearTop(item)) continue;
+      var container=item.closest('button,a,[role="button"]')||item;
+      hide(container,'chrome');
+    }
+    document.querySelectorAll('header,nav,[role="banner"],.site-header,.main-header').forEach(function(n){
+      var r=n.getBoundingClientRect();
+      if(r.top<450 && r.height<260) hide(n,'chrome');
+    });
   }
-  window.__robinPlayerOnlyClean=function(){
-    var p1=exactControl('Player 1'),p2=exactControl('Player 2');
-    if(!p1||!p2)return 'waiting-tabs';
-    var row=tabsContainer(p1,p2);
-    if(!row)return 'waiting-layout';
-    row.setAttribute('data-robin-player-tabs','yes');
-    pruneBefore(row);
-    // A separate article follows the video sources. Trim that content only
-    // when a quality/source section can be found reliably.
-    var last=null;
-    for(var quality of ['2160','1440','1080','720','480','360']){
-      var el=exactControl(quality)||exactControl(quality+'p');
-      if(el){last=el;break;}
-    }
-    if(last){
-      var end=last.closest('li,a,button,[role="button"]')||last.parentElement||last;
-      end.setAttribute('data-robin-quality-anchor','yes');
-      // Only remove following siblings within the article region, not across
-      // the whole body, where the legitimate access dialog may be appended.
-      for(var d=0,node=end;d<3&&node&&node!==document.body;d++,node=node.parentElement){
-        for(var n=node.nextElementSibling;n;n=n.nextElementSibling){
-          if(n.querySelector&&n.querySelector('[data-robin-player-tabs]'))continue;
-          prune(n);
-        }
+  function cleanArticles(){
+    /* FarsiPlex currently appends an unrelated movie-list article below the
+       real player/source list. Do not remove an article that owns the player. */
+    document.querySelectorAll('h1,h2,h3,h4').forEach(function(heading){
+      var title=(heading.textContent||'').trim();
+      if(!/^the 15 best iranian movies of all time/i.test(title)) return;
+      var section=heading.closest('article,.post,.blog-post,.entry-content,.post-content,.article-content');
+      if(section && hide(section,'article')) return;
+      // The site sometimes places this article in generic divs. Walk up to
+      // the largest dedicated article container, stopping BEFORE the player.
+      var candidate=heading, ancestor=heading.parentElement;
+      for(var depth=0;depth<6 && ancestor && ancestor!==document.body;depth++,ancestor=ancestor.parentElement){
+        if(containsPlayback(ancestor) || containsUnlock(ancestor)) break;
+        if((ancestor.textContent||'').length>22000) break;
+        candidate=ancestor;
       }
-    }
-    unstickScroll();
-    return last?'clean-player-and-quality':'clean-player';
+      hide(candidate,'article');
+    });
+  }
+  var cleaning=false;
+  window.__robinCleanPlayerPage=function(){
+    if(cleaning) return;
+    cleaning=true;
+    try { cleanNavigation(); cleanArticles(); } finally { cleaning=false; }
   };
-  var scheduled=false;
-  new MutationObserver(function(){
-    if(scheduled)return;
+  window.__robinCleanPlayerPage();
+  var scheduled=false, lastScan=Date.now();
+  var observer=new MutationObserver(function(){
+    if(scheduled) return;
     scheduled=true;
-    setTimeout(function(){scheduled=false;window.__robinPlayerOnlyClean();},400);
-  }).observe(document.documentElement,{childList:true,subtree:true});
-  return window.__robinPlayerOnlyClean();
+    // Player frameworks frequently modify the DOM. Throttle layout checks
+    // to avoid unnecessary CPU use and video stuttering on Fire TV.
+    var wait=Math.max(350,1500-(Date.now()-lastScan));
+    setTimeout(function(){
+      scheduled=false;lastScan=Date.now();window.__robinCleanPlayerPage();
+    },wait);
+  });
+  observer.observe(document.documentElement,{childList:true,subtree:true});
+  return 'installed';
 })();
 """
 
@@ -796,7 +809,7 @@ private const val compactPlaybackScript = """
  * into view rather than making the viewer search through the article. */
 private fun focusAvailablePlayerScript(): String = """
 (function(){
-  // Allow retry after site layout and advertisements change.
+  if(window.__robinPlayerLocated) return 'located';
   function shown(el){
     if(!el || !el.getBoundingClientRect) return false;
     var r=el.getBoundingClientRect(), st=getComputedStyle(el);
@@ -825,23 +838,106 @@ private fun focusAvailablePlayerScript(): String = """
  *  prevents swiping to source/quality choices on phones and TVs. */
 private const val restorePlayerScrollScript = """
 (function(){
-  var dialogs=[...document.querySelectorAll('[role="dialog"],[aria-modal="true"],.modal,.modal-dialog,[class*="unlock"],[id*="unlock"]')];
-  var unlockOpen=dialogs.some(function(el){
-    var r=el.getBoundingClientRect(), st=getComputedStyle(el);
-    if(r.width<40||r.height<40||st.display==='none'||st.visibility==='hidden')return false;
-    var t=(el.textContent||'').toLowerCase();
-    return t.includes('unlock more content') && t.includes('view a short ad');
-  });
-  if(unlockOpen) return 'unlock-visible';
-  [document.documentElement,document.body].forEach(function(el){
-    if(!el) return;
+  function hasUnlock(){
+    return [...document.querySelectorAll('[role="dialog"],[aria-modal="true"],.modal,.modal-dialog')].some(function(el){
+      var r=el.getBoundingClientRect(),t=(el.textContent||'').toLowerCase();
+      return r.width>50&&r.height>50&&t.includes('unlock more content')&&t.includes('view a short ad');
+    });
+  }
+  if(hasUnlock()) return 'unlock-visible';
+  [document.documentElement,document.body,...document.querySelectorAll('main,#content,.site-content,.content-area,[class*="scroll"],[class*="wrapper"]')].forEach(function(el){
+    if(!el)return;
     var css=getComputedStyle(el);
-    if(css.overflowY==='hidden'||css.overflowY==='clip'){
+    if(/hidden|clip/.test(css.overflowY) && el.scrollHeight>el.clientHeight+50)
       el.style.setProperty('overflow-y','auto','important');
-    }
-    el.style.setProperty('touch-action','pan-y','important');
+    if(css.touchAction==='none')el.style.setProperty('touch-action','pan-y','important');
   });
   return 'scroll-ready';
+})();
+"""
+
+/** Compact advertising that is outside the player and access dialog. In addition
+ * to hiding the ad iframe, collapse its dedicated host wrapper, otherwise a
+ * blank full-width banner continues to consume most of the phone viewport. */
+private const val reduceFinalAdSpaceScript = """
+(function(){
+  if(!/\/play-hq-player\/?/.test(location.pathname))return 'other-page';
+  if(!window.__robinAdSpaceInstalled){
+    window.__robinAdSpaceInstalled=true;
+    var css=document.createElement('style');
+    css.textContent=`
+      ins.adsbygoogle,.adsbygoogle,.google-auto-placed,
+      [data-ad-client],[data-ad-slot],[data-google-query-id],
+      [id^="google_ads_iframe"],[id^="aswift_"],
+      [id*="google_adsense_anchor"],.ad-banner,.top-banner,
+      [data-robin-adspace="hidden"]{
+        display:none!important;visibility:hidden!important;
+        height:0!important;min-height:0!important;max-height:0!important;
+        margin:0!important;padding:0!important;overflow:hidden!important;
+      }
+    `;
+    (document.head||document.documentElement).appendChild(css);
+  }
+  function isUnlock(el){
+    for(var n=el,i=0;n&&i<6;i++,n=n.parentElement){
+      if(!n.matches)continue;
+      if(!n.matches('[role="dialog"],[aria-modal="true"],.modal,.popup,[class*="unlock"]'))continue;
+      var t=(n.textContent||'').toLowerCase();
+      if(t.includes('unlock more content')&&t.includes('view a short ad'))return true;
+    }
+    return false;
+  }
+  function hasControls(n){
+    var text=(n.textContent||'').toLowerCase().slice(0,20000);
+    return text.includes('video sources')||
+      (text.includes('player 1')&&text.includes('player 2'))||
+      !!n.querySelector('video,[id*="jwplayer"],[class*="jwplayer"]');
+  }
+  function collapse(n){
+    if(!n||n===document.body||n===document.documentElement||isUnlock(n)||hasControls(n))return false;
+    n.setAttribute('data-robin-adspace','hidden');return true;
+  }
+  var ads=[...document.querySelectorAll('ins.adsbygoogle,.adsbygoogle,.google-auto-placed,[data-ad-client],[data-ad-slot],[id^="google_ads_iframe"],[id^="aswift_"],iframe[src*="doubleclick"],iframe[src*="googlesyndication"],iframe[src*="googleadservices"],.ad-banner,.top-banner')];
+  ads.forEach(function(ad){
+    if(isUnlock(ad))return;
+    var wrapper=ad;
+    for(var i=0;i<4&&wrapper&&wrapper.parentElement;i++){
+      var parent=wrapper.parentElement;
+      if(parent===document.body||hasControls(parent)||isUnlock(parent))break;
+      var children=[...parent.children].filter(function(ch){return !ch.matches('script,style,noscript');});
+      var txt=(parent.textContent||'').trim();
+      var pclass=String(parent.className||'')+' '+String(parent.id||'');
+      var onlyAd=children.length<=2 && children.some(function(ch){return ch===wrapper||ch.contains(ad);}) && txt.length<100;
+      if(!onlyAd && !/ad-|adsense|banner|google|advert|sponsor/i.test(pclass))break;
+      wrapper=parent;
+    }
+    collapse(wrapper);
+  });
+  // Google sometimes injects a fixed bottom/top anchor with a little collapse
+  // handle outside its iframe. Only hide hosts explicitly marked as ad units.
+  return 'cleaned:'+ads.length;
+})();
+"""
+
+/** Find a real source option and scroll its ancestors, not just window. */
+private const val scrollToVideoSourcesScript = """
+(function(){
+  var all=[...document.querySelectorAll('h1,h2,h3,h4,h5,button,a,li,span,div')];
+  var target=all.find(function(el){
+    var t=(el.textContent||'').trim().replace(/\s+/g,' ').toLowerCase();
+    return t==='video sources'||t==='player 1'||t==='480'||t==='480p';
+  });
+  if(!target)return 'not-found';
+  target.scrollIntoView({block:'center',behavior:'instant'});
+  var r=target.getBoundingClientRect();
+  if(r.top>innerHeight-70 || r.bottom<0){
+    for(var p=target.parentElement;p;p=p.parentElement){
+      if(p.scrollHeight>p.clientHeight+40){
+        p.scrollTop+=(r.top-innerHeight/3);
+      }
+    }
+  }
+  return 'moved';
 })();
 """
 
@@ -922,19 +1018,16 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                     evaluateJavascript("""(function(){
                       var amount=$pixels;
                       var root=document.scrollingElement||document.documentElement;
-                      var candidates=[root,document.body,...document.querySelectorAll('main,[class*="content"],[class*="scroll"]')];
+                      var candidates=[root,...document.querySelectorAll('main,[class*="content"],[class*="scroll"]')];
                       var target=candidates.find(function(el){
                         if(!el || !el.scrollHeight)return false;
-                        return el.scrollHeight>el.clientHeight+30;
+                        var st=getComputedStyle(el);
+                        return el.scrollHeight>el.clientHeight+50 &&
+                          (el===root || /auto|scroll/.test(st.overflowY));
                       });
-                      if(target){target.style.setProperty('overflow-y','auto','important');target.scrollTop+=amount;}
-                      window.scrollBy(0,amount);
-                      // If the host is still stuck, jump to genuine site options.
-                      var chosen=(amount>0?'480':'Player 1');
-                      var labels=[...document.querySelectorAll('a,button,li,span,div')];
-                      var el=labels.find(function(n){return(n.textContent||'').trim()===chosen;});
-                      if(el && Math.abs(window.scrollY)<5 && root.scrollHeight>innerHeight+40)
-                         el.scrollIntoView({block:'center',behavior:'instant'});
+                      if(target)target.scrollTop+=amount;
+                      else window.scrollBy(0,amount);
+                      document.body&&document.body.scrollBy&&document.body.scrollBy(0,amount);
                     })();""", null)
                     true
                 } else false
@@ -968,6 +1061,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                         playerMessage = "Choose player or video quality"
                         view.evaluateJavascript(compactPlaybackScript, null)
                         view.evaluateJavascript(playerAdCleaner, null)
+                        view.evaluateJavascript(reduceFinalAdSpaceScript, null)
                         view.evaluateJavascript(restorePlayerScrollScript, null)
                     }
                     // Probe for the required access dialog promptly on EVERY page.
@@ -1064,6 +1158,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
             }
             if (atFinal && showWebContent) {
                 web.evaluateJavascript(restorePlayerScrollScript, null)
+                web.evaluateJavascript(reduceFinalAdSpaceScript, null)
                 web.evaluateJavascript(findOptionsScript()) { raw ->
                     val decoded = raw.removeSurrounding("\"").replace("\\n", "")
                     val parts = decoded.split('|')
@@ -1132,6 +1227,19 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                             }) { Text("${if (selectedQuality == number) "✓ " else ""}${number}p") }
                         }
                     }
+                }
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = {
+                        web.evaluateJavascript(restorePlayerScrollScript, null)
+                        web.evaluateJavascript(reduceFinalAdSpaceScript, null)
+                        web.evaluateJavascript(scrollToVideoSourcesScript) { status ->
+                            if (status.contains("not-found")) playerMessage = "Source options are still loading"
+                        }
+                    }) { Text("↓ Video & quality", color = Color.White) }
+                    TextButton(onClick = {
+                        web.evaluateJavascript(restorePlayerScrollScript, null)
+                        web.scrollBy(0, (280 * web.resources.displayMetrics.density).toInt())
+                    }) { Text("↓ Scroll down", color = Color.White) }
                 }
                 Text(playerMessage, fontSize = 12.sp, color = Color.LightGray, maxLines = 2, modifier = Modifier.padding(bottom = 5.dp))
             }
