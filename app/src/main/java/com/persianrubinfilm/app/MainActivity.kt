@@ -558,51 +558,93 @@ private const val startRequiredAccessAdScript = """
 /** Hide obvious ad banners without touching FarsiPlex's legitimate "View a short ad" unlock dialog.
  * An unlock wall is access control, not a removable popup. */
 private const val playerAdCleaner = """
-(function() {
-  if (window.__robinAdCleanerInstalled) return 'already-installed';
-  window.__robinAdCleanerInstalled = true;
-  // Cosmetic ad filtering only. Leave the provider's 24-hour unlock and
-  // video-provider pre-roll untouched, or playback access may stop working.
-  var adNodeSelector = [
-    'ins.adsbygoogle', '.adsbygoogle', '.google-auto-placed',
-    '[id^="google_ads_"]', '[id^="div-gpt-ad"]', '[id^="google_ads_iframe"]',
-    '[data-ad-client]', '[data-ad-slot]', '[data-google-query-id]',
-    '.ad-banner', '.banner-ad', '.advertisement', '.adsense',
-    '.ad-unit', '.ad-slot', '.advertising-banner', '.ad-wrapper',
-    '.sticky-ad', '.floating-ad', '.top-banner', '.bottom-banner',
-    '.ezoic-ad', '.adthrive-ad'
+(function(){
+  if (window.__robinAdCleanerInstalled) {
+    window.__robinCleanBanners(); return 'refreshed';
+  }
+  window.__robinAdCleanerInstalled=true;
+  // Cosmetic filtering only. The 24-hour access dialog and actual player ads
+  // must remain accessible so FarsiPlex can grant playback normally.
+  var selectors=[
+    'ins.adsbygoogle','.adsbygoogle','.google-auto-placed',
+    '[id^="google_ads_iframe"]','[id^="google_ads_"]','[id^="aswift_"]',
+    '[id^="div-gpt-ad"]','[id*="google-adsense-platform-ads-anchor"]',
+    '[id*="google_adsense_anchor"]','[data-ad-client]','[data-ad-slot]',
+    '[data-google-query-id]', '.ad-banner','.banner-ad','.advertisement',
+    '.adsense','.ad-unit','.ad-slot','.ad-wrapper','.advertising-banner',
+    '.ad-container','.sticky-ad','.floating-ad','.top-banner',
+    '.bottom-banner','.ezoic-ad','.adthrive-ad'
   ].join(',');
-  function protectedArea(el) {
-    return !!el.closest('[role="dialog"],.modal,.modal-dialog,.popup,.unlock-modal,[class*="unlock"],[id*="unlock"]');
+  function shortText(el){return (el.textContent||'').replace(/\s+/g,' ').trim().slice(0,2000).toLowerCase();}
+  function isUnlock(el){
+    if(!el) return false;
+    // Inspect the actual dialog content rather than treating every .popup as
+    // protected; some banner ad wrappers also use that class.
+    for(var p=el, n=0; p && n<7 && p!==document.body; p=p.parentElement,n++){
+      if(!p.matches || !p.matches('[role="dialog"],[aria-modal="true"],.modal,.modal-dialog,.popup,[class*="unlock"],[id*="unlock"]')) continue;
+      var t=shortText(p);
+      if(t.indexOf('unlock more content')>=0 && t.indexOf('view a short ad')>=0) return true;
+    }
+    return false;
   }
-  function inVideoPlayer(el) {
-    return !!el.closest('video,[class*="video-player"],[id*="video-player"],[class*="jwplayer"],[id*="jwplayer"]');
+  function ownsPlayer(el){
+    if(!el || !el.querySelector) return false;
+    var t=shortText(el);
+    return (t.includes('player 1') && t.includes('player 2')) ||
+      t.includes('video sources') || !!el.querySelector('video,[id*="jwplayer"],[class*="jwplayer"]');
   }
-  function conceal(el) {
-    if (!el || protectedArea(el) || inVideoPlayer(el)) return;
+  function insidePlayer(el){
+    return !!el.closest('video,[class*="jwplayer"],[id*="jwplayer"],[class*="video-player"],[id*="video-player"]');
+  }
+  function conceal(el){
+    if(!el || el===document.body || el===document.documentElement || isUnlock(el) || insidePlayer(el) || ownsPlayer(el)) return false;
+    el.setAttribute('data-robin-banner','hidden');
     el.style.setProperty('display','none','important');
     el.style.setProperty('height','0','important');
+    el.style.setProperty('min-height','0','important');
     el.style.setProperty('margin','0','important');
+    el.style.setProperty('padding','0','important');
+    return true;
   }
-  function cleanStandaloneBanners() {
-    document.querySelectorAll(adNodeSelector).forEach(conceal);
-    document.querySelectorAll('iframe[src]').forEach(function(frame){
-      if (protectedArea(frame) || inVideoPlayer(frame)) return;
+  var style=document.createElement('style');
+  style.id='robin-banner-style';
+  style.textContent='[data-robin-banner="hidden"]{display:none!important;height:0!important;min-height:0!important;margin:0!important;padding:0!important;}';
+  (document.head||document.documentElement).appendChild(style);
+  function clean(){
+    document.querySelectorAll(selectors).forEach(function(el){
+      var parent=el.parentElement;
+      if(!conceal(el)) return;
+      // Collapse space reserved for a single ad, but never a container with
+      // player tabs, source/quality choices, or the legitimate access prompt.
+      for(var n=0;n<2 && parent && parent!==document.body;n++){
+        if(ownsPlayer(parent)||isUnlock(parent)) break;
+        var cls=((parent.className||'')+' '+(parent.id||'')).toLowerCase();
+        var adWrapper=/adsbygoogle|ad-container|ad-wrapper|adsense|ad-slot|ad-unit|google|aswift|anchor-ad|banner-ad|top-banner|sticky-ad/.test(cls);
+        var onlyHidden=Array.from(parent.children).every(function(child){
+          return child.getAttribute('data-robin-banner')==='hidden' ||
+            (child.matches && child.matches('script,style,noscript'));
+        });
+        if(!(adWrapper||onlyHidden) || shortText(parent).length>140) break;
+        var next=parent.parentElement;
+        conceal(parent);parent=next;
+      }
+    });
+    // Advertising iframes often arrive only after the site has initialized.
+    document.querySelectorAll('iframe[src],iframe[id]').forEach(function(frame){
+      if(isUnlock(frame)||insidePlayer(frame)) return;
       var src=(frame.getAttribute('src')||'').toLowerCase();
-      if (!/doubleclick\.net|googlesyndication\.com|googleadservices\.com/.test(src)) return;
-      conceal(frame);
-      var container=frame.parentElement;
-      if(container && container.children.length===1 && !protectedArea(container) && !inVideoPlayer(container)) conceal(container);
+      var id=(frame.id||'').toLowerCase();
+      if(/doubleclick\.net|googlesyndication\.com|googleadservices\.com|adservice\.google/.test(src) ||
+         /^google_ads_iframe|^aswift_/.test(id)) conceal(frame);
     });
   }
-  cleanStandaloneBanners();
-  // Newly inserted banners should also be hidden without reloading the player.
+  window.__robinCleanBanners=clean;
+  clean();
   var pending=false;
-  var observer=new MutationObserver(function(){
-    if(pending) return; pending=true;
-    requestAnimationFrame(function(){pending=false;cleanStandaloneBanners();});
-  });
-  observer.observe(document.documentElement, {childList:true,subtree:true});
+  new MutationObserver(function(){
+    if(pending)return;pending=true;
+    setTimeout(function(){pending=false;clean();},250);
+  }).observe(document.documentElement,{childList:true,subtree:true});
   return 'installed';
 })();
 """
@@ -626,7 +668,9 @@ private const val compactPlaybackScript = """
     .site-navigation, .main-navigation, .header-menu,
     .navbar, .navbar-header, .navigation-bar,
     .site-branding, .header-branding, .header-logo,
-    .site-logo, .menu-toggle, .nav-toggle, .search-toggle,
+    .site-logo, .custom-logo-link, .logo-area, .logo-container,
+    .menu-toggle, .nav-toggle, .search-toggle, .hamburger,
+    .mobile-menu, .header-search, .header-menu,
     footer.site-footer, .site-footer, #colophon,
     .breadcrumbs, .breadcrumb, aside.widget-area, .sidebar {
       display:none!important; max-height:0!important; margin:0!important;
@@ -687,6 +731,21 @@ private const val compactPlaybackScript = """
       // at least remove the logo itself (without removing the video container).
       hide(row || logo,'chrome');
     }
+    /* Sometimes the logo is a background image and has no alt/title.
+       Hide the site-home link near the top, but never the player/quality row. */
+    document.querySelectorAll('a[href],img[src],input[type="search"]').forEach(function(el){
+      if(!nearTop(el))return;
+      var raw=((el.getAttribute('href')||'')+' '+(el.getAttribute('src')||'')+' '+
+        (el.getAttribute('alt')||'')+' '+(el.className||'')).toLowerCase();
+      var siteHome=false;
+      try{var u=new URL(el.getAttribute('href')||'#',location.href);
+        siteHome=u.hostname===location.hostname && (u.pathname==='/'||u.pathname==='/explore/');}
+      catch(e){}
+      if(siteHome || /farsiplex.*logo|logo.*farsiplex|فارسی.*plex/.test(raw)){
+        var parent=el.closest('a')||el;
+        hide(parent,'chrome');
+      }
+    });
     /* Independently hide menu/search affordances when the logo isn't an image. */
     var triggers=document.querySelectorAll(
       '.menu-toggle,.search-toggle,.mobile-menu-toggle,.navbar-toggle,'+
@@ -750,22 +809,52 @@ private const val compactPlaybackScript = """
  * into view rather than making the viewer search through the article. */
 private fun focusAvailablePlayerScript(): String = """
 (function(){
- if (window.__robinPlayerLocated) return 'located';
- var els=[...document.querySelectorAll('video, iframe, [class*="player"], [id*="player"], h2, h3')];
- var target=els.find(function(x){
-   var text=(x.textContent||'').trim();
-   var tag=x.tagName.toLowerCase();
-   var src=x.getAttribute('src')||'';
-   var rect=x.getBoundingClientRect();
-   return rect.width>150 && rect.height>50 && (
-     tag==='video' || (tag==='iframe' && !/ads|doubleclick|google/i.test(src)) ||
-     /video sources|player 1/i.test(text.slice(0,90))
-   );
- });
- if (!target) return 'waiting';
- window.__robinPlayerLocated=true;
- target.scrollIntoView({block:'center',behavior:'instant'});
- return 'located';
+  if(window.__robinPlayerLocated) return 'located';
+  function shown(el){
+    if(!el || !el.getBoundingClientRect) return false;
+    var r=el.getBoundingClientRect(), st=getComputedStyle(el);
+    return r.width>50 && r.height>14 && st.display!=='none' && st.visibility!=='hidden';
+  }
+  // The first iframe on FarsiPlex can be a large advertisement. Never use a
+  // generic iframe as the scroll target; prefer Player 1 or Video Sources.
+  var choices=[...document.querySelectorAll('button,a,[role="tab"],li,div,span,h2,h3,h4')];
+  var target=choices.find(function(el){
+    var t=(el.textContent||'').trim().replace(/\s+/g,' ');
+    return shown(el) && /^player\s*1$/i.test(t) && t.length<30;
+  });
+  if(!target) target=choices.find(function(el){
+    return shown(el) && /^video sources$/i.test((el.textContent||'').trim());
+  });
+  if(!target) target=[...document.querySelectorAll('video,[class*="jwplayer"],[id*="jwplayer"]')].find(shown);
+  if(!target) return 'waiting';
+  window.__robinPlayerLocated=true;
+  target.scrollIntoView({block:'start',behavior:'instant'});
+  return 'located';
+})();
+"""
+
+/** Restore ordinary page scrolling after the provider removes its access
+ *  overlay. Some offerwalls leave overflow:hidden on html/body, and this
+ *  prevents swiping to source/quality choices on phones and TVs. */
+private const val restorePlayerScrollScript = """
+(function(){
+  var dialogs=[...document.querySelectorAll('[role="dialog"],[aria-modal="true"],.modal,.modal-dialog,[class*="unlock"],[id*="unlock"]')];
+  var unlockOpen=dialogs.some(function(el){
+    var r=el.getBoundingClientRect(), st=getComputedStyle(el);
+    if(r.width<40||r.height<40||st.display==='none'||st.visibility==='hidden')return false;
+    var t=(el.textContent||'').toLowerCase();
+    return t.includes('unlock more content') && t.includes('view a short ad');
+  });
+  if(unlockOpen) return 'unlock-visible';
+  [document.documentElement,document.body].forEach(function(el){
+    if(!el) return;
+    var css=getComputedStyle(el);
+    if(css.overflowY==='hidden'||css.overflowY==='clip'){
+      el.style.setProperty('overflow-y','auto','important');
+    }
+    el.style.setProperty('touch-action','pan-y','important');
+  });
+  return 'scroll-ready';
 })();
 """
 
@@ -835,6 +924,30 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
             settings.setSupportMultipleWindows(false)
             isFocusable = true
             isFocusableInTouchMode = true
+            isVerticalScrollBarEnabled = true
+            // On Fire Stick, the embedded web player may consume D-pad keys.
+            // Scroll the *page* with Up/Down when not in provider full screen.
+            setOnKeyListener { _, keyCode, event ->
+                if (customView == null && event.action == KeyEvent.ACTION_DOWN &&
+                    (keyCode == KeyEvent.KEYCODE_DPAD_DOWN || keyCode == KeyEvent.KEYCODE_DPAD_UP)) {
+                    val direction = if (keyCode == KeyEvent.KEYCODE_DPAD_DOWN) 1 else -1
+                    val pixels = (220 * resources.displayMetrics.density).toInt() * direction
+                    evaluateJavascript("""(function(){
+                      var amount=$pixels;
+                      var root=document.scrollingElement||document.documentElement;
+                      var candidates=[root,...document.querySelectorAll('main,[class*="content"],[class*="scroll"]')];
+                      var target=candidates.find(function(el){
+                        if(!el || !el.scrollHeight)return false;
+                        var st=getComputedStyle(el);
+                        return el.scrollHeight>el.clientHeight+50 &&
+                          (el===root || /auto|scroll/.test(st.overflowY));
+                      });
+                      if(target)target.scrollTop+=amount;
+                      else window.scrollBy(0,amount);
+                    })();""", null)
+                    true
+                } else false
+            }
             webViewClient = object : WebViewClient() {
                 override fun onPageStarted(view: WebView?, pageUrl: String?, favicon: Bitmap?) {
                     super.onPageStarted(view, pageUrl, favicon)
@@ -864,6 +977,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                         playerMessage = "Choose player or video quality"
                         view.evaluateJavascript(compactPlaybackScript, null)
                         view.evaluateJavascript(playerAdCleaner, null)
+                        view.evaluateJavascript(restorePlayerScrollScript, null)
                     }
                     // Probe for the required access dialog promptly on EVERY page.
                     view.evaluateJavascript(startRequiredAccessAdScript) { raw ->
@@ -958,6 +1072,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                 manualContinuation = false
             }
             if (atFinal && showWebContent) {
+                web.evaluateJavascript(restorePlayerScrollScript, null)
                 web.evaluateJavascript(findOptionsScript()) { raw ->
                     val decoded = raw.removeSurrounding("\"").replace("\\n", "")
                     val parts = decoded.split('|')
