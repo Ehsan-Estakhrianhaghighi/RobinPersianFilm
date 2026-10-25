@@ -913,8 +913,24 @@ private const val reduceFinalAdSpaceScript = """
     }
     collapse(wrapper);
   });
-  // Google sometimes injects a fixed bottom/top anchor with a little collapse
-  // handle outside its iframe. Only hide hosts explicitly marked as ad units.
+  // Some top ad units arrive as plain iframes without adsbygoogle classes.
+  // Only remove frames above the source tabs with clear advertising markers.
+  var tabs=[...document.querySelectorAll('button,a,[role="tab"],li,div,span')].find(function(el){
+    return (el.textContent||'').trim().toLowerCase()==='player 1' && el.getBoundingClientRect().width>30;
+  });
+  var tabTop=tabs?tabs.getBoundingClientRect().top:innerHeight;
+  document.querySelectorAll('iframe').forEach(function(frame){
+    if(isUnlock(frame))return;
+    var r=frame.getBoundingClientRect();
+    if(r.width<200||r.height<110||r.top>=tabTop)return;
+    var id=(frame.id||'')+' '+(frame.className||'')+' '+(frame.getAttribute('title')||'')+' '+(frame.getAttribute('src')||'');
+    var parent=frame.parentElement;
+    var p=((parent&&parent.id)||'')+' '+((parent&&parent.className)||'');
+    if(!/(advert|banner|adsense|adsbygoogle|googleads|googlesyndication|doubleclick|google_ads|aswift|adslot|ad-slot|sponsor|google-auto|adsystem)/i.test(id+' '+p))return;
+    if(!collapse(parent))collapse(frame);
+  });
+  // A Google anchor sometimes reserves a fixed-height host outside its iframe.
+  // The host can be collapsed, but never an unlock dialog or player wrapper.
   return 'cleaned:'+ads.length;
 })();
 """
@@ -925,10 +941,17 @@ private const val scrollToVideoSourcesScript = """
   var all=[...document.querySelectorAll('h1,h2,h3,h4,h5,button,a,li,span,div')];
   var target=all.find(function(el){
     var t=(el.textContent||'').trim().replace(/\s+/g,' ').toLowerCase();
-    return t==='video sources'||t==='player 1'||t==='480'||t==='480p';
+    return t==='player 1';
+  });
+  if(!target)target=all.find(function(el){
+    var t=(el.textContent||'').trim().replace(/\s+/g,' ').toLowerCase();
+    return t==='video sources'||t==='480'||t==='480p';
   });
   if(!target)return 'not-found';
-  target.scrollIntoView({block:'center',behavior:'instant'});
+  // Avoid constantly pulling the page away from a user who is choosing a source.
+  if(window.__robinAutoSourcesScrolled) return 'already-scrolled';
+  window.__robinAutoSourcesScrolled=true;
+  target.scrollIntoView({block:'start',behavior:'instant'});
   var r=target.getBoundingClientRect();
   if(r.top>innerHeight-70 || r.bottom<0){
     for(var p=target.parentElement;p;p=p.parentElement){
@@ -1063,6 +1086,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                         view.evaluateJavascript(playerAdCleaner, null)
                         view.evaluateJavascript(reduceFinalAdSpaceScript, null)
                         view.evaluateJavascript(restorePlayerScrollScript, null)
+                        view.evaluateJavascript(scrollToVideoSourcesScript, null)
                     }
                     // Probe for the required access dialog promptly on EVERY page.
                     view.evaluateJavascript(startRequiredAccessAdScript) { raw ->
@@ -1174,6 +1198,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                             playerMessage = "Choose a source or quality below"
                         }
                         web.evaluateJavascript(focusAvailablePlayerScript(), null)
+                        web.evaluateJavascript(scrollToVideoSourcesScript, null)
                     }
                 }
             }
@@ -1227,19 +1252,6 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                             }) { Text("${if (selectedQuality == number) "✓ " else ""}${number}p") }
                         }
                     }
-                }
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    TextButton(onClick = {
-                        web.evaluateJavascript(restorePlayerScrollScript, null)
-                        web.evaluateJavascript(reduceFinalAdSpaceScript, null)
-                        web.evaluateJavascript(scrollToVideoSourcesScript) { status ->
-                            if (status.contains("not-found")) playerMessage = "Source options are still loading"
-                        }
-                    }) { Text("↓ Video & quality", color = Color.White) }
-                    TextButton(onClick = {
-                        web.evaluateJavascript(restorePlayerScrollScript, null)
-                        web.scrollBy(0, (280 * web.resources.displayMetrics.density).toInt())
-                    }) { Text("↓ Scroll down", color = Color.White) }
                 }
                 Text(playerMessage, fontSize = 12.sp, color = Color.LightGray, maxLines = 2, modifier = Modifier.padding(bottom = 5.dp))
             }
