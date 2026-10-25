@@ -52,6 +52,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import kotlinx.coroutines.Dispatchers
@@ -1130,6 +1132,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     var selectedQuality by remember(url) { mutableStateOf("") }
     var nativeSources by remember(url) { mutableStateOf<List<NativeVideoSource>>(emptyList()) }
     var nativeChoice by remember(url) { mutableStateOf<NativeVideoSource?>(null) }
+    var nativeFullscreen by remember(url) { mutableStateOf(false) }
     var playerMessage by remember(url) { mutableStateOf("Opening the final player…") }
     val nativePlayer = remember(url) { ExoPlayer.Builder(context).build() }
     DisposableEffect(nativePlayer) {
@@ -1418,6 +1421,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
         }
     }
     DisposableEffect(web) { onDispose { web.stopLoading(); web.onPause(); web.destroy() } }
+    BackHandler(nativeFullscreen) { nativeFullscreen = false }
     BackHandler(customView != null) {
         customCallback?.onCustomViewHidden(); customView = null; customCallback = null
     }
@@ -1438,25 +1442,34 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
             }
             if (customView == null) {
                 if (nativeSources.isNotEmpty()) {
-                    Text("Native playback · choose a source and quality", color = Color.White, fontSize = 13.sp)
+                    Text("Video options", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    val groupedSources = nativeSources.distinctBy { it.url }
+                    Text("Player / source", color = Color.LightGray, fontSize = 12.sp)
                     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-                        nativeSources.forEachIndexed { index, candidate ->
+                        groupedSources.forEachIndexed { index, candidate ->
                             TextButton(onClick = { nativeChoice = candidate }) {
-                                val display = candidate.label.take(20).ifBlank { "Source ${index + 1}" }
-                                val resolution = if (candidate.quality == "Auto") "Auto" else "${candidate.quality}p"
-                                Text("${if (nativeChoice?.url == candidate.url) "✓ " else ""}$display · $resolution", color = Color.White)
+                                Text("${if (nativeChoice?.url == candidate.url) "✓ " else ""}Player ${index + 1}",
+                                    color = if (nativeChoice?.url == candidate.url) Color.White else accent)
                             }
                         }
                     }
-                    if (nativeChoice != null) {
-                        Text("Quality: ${nativeChoice?.quality?.let { if (it == "Auto") it else "${it}p" } ?: "Auto"} · Only verified sources shown",
+                    Text("Quality", color = Color.LightGray, fontSize = 12.sp)
+                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                        groupedSources.distinctBy { it.quality }.forEach { candidate ->
+                            val qualityLabel = if (candidate.quality == "Auto") "Auto" else "${candidate.quality}p"
+                            TextButton(onClick = { nativeChoice = candidate }) {
+                                Text("${if (nativeChoice?.quality == candidate.quality) "✓ " else ""}$qualityLabel",
+                                    color = if (nativeChoice?.quality == candidate.quality) Color.White else accent)
+                            }
+                        }
+                    }
+                    if (groupedSources.size == 1) {
+                        Text("Only one authorized source and quality detected for this episode.",
                             color = Color.LightGray, fontSize = 12.sp)
-                        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-                            TextButton(onClick = {
-                                nativeChoice = null
-                                playerMessage = "Select another quality or Player 1/2/3 on the provider page, then start the video."
-                            }) { Text("Change quality / player") }
-                            TextButton(onClick = { nativeChoice = null }) { Text("Website player") }
+                    }
+                    if (nativeChoice != null) {
+                        TextButton(onClick = { nativeFullscreen = true }) {
+                            Text("⛶ Full screen", color = Color.White)
                         }
                     }
                 }
@@ -1515,6 +1528,29 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                             Text("Checking the selected video's playback page", color = Color.LightGray, fontSize = 12.sp)
                         }
                     }
+                }
+            }
+        }
+        if (nativeFullscreen && nativeChoice != null) {
+            Dialog(
+                onDismissRequest = { nativeFullscreen = false },
+                properties = DialogProperties(usePlatformDefaultWidth = false)
+            ) {
+                Box(Modifier.fillMaxSize().background(Color.Black)) {
+                    AndroidView(
+                        factory = { PlayerView(it).apply {
+                            player = nativePlayer
+                            useController = true
+                            isFocusable = true
+                            requestFocus()
+                        } },
+                        update = { it.player = nativePlayer },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                    TextButton(
+                        onClick = { nativeFullscreen = false },
+                        modifier = Modifier.align(Alignment.TopEnd)
+                    ) { Text("Exit full screen", color = Color.White) }
                 }
             }
         }
