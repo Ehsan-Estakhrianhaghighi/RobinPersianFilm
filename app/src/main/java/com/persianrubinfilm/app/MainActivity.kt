@@ -61,6 +61,8 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URI
+import java.net.HttpURLConnection
+import java.net.URL
 
 private val background = Color(0xFF101015)
 private val panel = Color(0xFF24242D)
@@ -1073,6 +1075,48 @@ private fun selectOptionScript(kind: String, value: String): String {
 
 private data class NativeVideoSource(val label: String, val url: String, val quality: String)
 
+/** Check whether a filename-based quality variant is actually served for the
+ * currently authorized request. The original signed URL is reused unchanged
+ * except for the filename; invalid/expired signatures are rejected by the host.
+ * No signatures are generated or access checks bypassed.
+ */
+private suspend fun probeAuthorizedQualityVariants(source: NativeVideoSource): List<NativeVideoSource> =
+    withContext(Dispatchers.IO) {
+        val uri = try { URI(source.url) } catch (_: Exception) { return@withContext emptyList() }
+        val host = uri.host?.lowercase().orEmpty()
+        if (uri.scheme != "https" || !(host == "farsiplex.buzz" || host.endsWith(".farsiplex.buzz")))
+            return@withContext emptyList()
+        val match = Regex("""\.(360|480|720|1080|1440|2160)\.mp4$""", RegexOption.IGNORE_CASE)
+            .find(uri.path.orEmpty()) ?: return@withContext emptyList()
+        val original = match.groupValues[1]
+        // Only reasonable alternatives, not guesses at a provider's server list.
+        val resolutions = listOf("480", "720", "1080").filter { it != original }
+        resolutions.mapNotNull { quality ->
+            val candidatePath = uri.path.replaceRange(
+                match.range.first,
+                match.range.last + 1,
+                ".$quality.mp4"
+            )
+            val checkUri = URI(uri.scheme, uri.rawAuthority, candidatePath, uri.rawQuery, null)
+            val connection = try {
+                (URL(checkUri.toASCIIString()).openConnection() as HttpURLConnection).apply {
+                    requestMethod = "HEAD"
+                    connectTimeout = 3500
+                    readTimeout = 3500
+                    instanceFollowRedirects = false
+                    setRequestProperty("Accept", "video/mp4")
+                }
+            } catch (_: Exception) { null }
+            if (connection == null) return@mapNotNull null
+            val accepted = try {
+                val code = connection.responseCode
+                val contentType = connection.contentType.orEmpty().lowercase()
+                code in 200..206 && contentType.startsWith("video/")
+            } catch (_: Exception) { false } finally { connection.disconnect() }
+            if (accepted) NativeVideoSource("Verified $quality", checkUri.toASCIIString(), quality) else null
+        }
+    }
+
 /** Only discover media URLs already exposed to the user's authorized browser page.
  * No token generation, ad-unlock circumvention or cross-origin iframe inspection.
  * Native playback is optional because some hosts require their embedded player. */
@@ -1132,6 +1176,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     var nativeChoice by remember(url) { mutableStateOf<NativeVideoSource?>(null) }
     var nativeFullscreen by remember(url) { mutableStateOf(false) }
     var pendingSourceChange by remember(url) { mutableStateOf(false) }
+    var checkingQualityVariants by remember(url) { mutableStateOf(false) }
     var playerMessage by remember(url) { mutableStateOf("Opening the final player…") }
     val nativePlayer = remember(url) { ExoPlayer.Builder(context).build() }
     DisposableEffect(nativePlayer) {
@@ -1181,6 +1226,22 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
             pendingSourceChange = false
             nativeChoice = nativeSources.firstOrNull { it.url == rawUrl } ?: source
             playerMessage = "Playing ${quality}p natively"
+        }
+    }
+    // Recheck only when a different primary signed stream is observed.
+    // This confirms the existence and access status of alternate resolutions.
+    val primarySourceUrl = nativeSources.firstOrNull()?.url
+    LaunchedEffect(primarySourceUrl) {
+        val primary = nativeSources.firstOrNull() ?: return@LaunchedEffect
+        checkingQualityVariants = true
+        try {
+            val verified = probeAuthorizedQualityVariants(primary)
+            if (verified.isNotEmpty()) {
+                nativeSources = (nativeSources + verified)
+                    .distinctBy { it.url }.takeLast(24)
+            }
+        } finally {
+            checkingQualityVariants = false
         }
     }
     val web = remember(url) {
@@ -1492,8 +1553,11 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                             }
                         }
                     }
-                    if (availableQualities.isEmpty() && groupedSources.size == 1) {
-                        Text("Other qualities are not yet exposed by this provider page.",
+                    if (checkingQualityVariants) {
+                        Text("Checking whether 720p or 1080p is available for this episode…",
+                            color = Color.LightGray, fontSize = 12.sp)
+                    } else if (availableQualities.isEmpty() && groupedSources.distinctBy { it.quality }.size == 1) {
+                        Text("No additional authorized quality was confirmed for this episode.",
                             color = Color.LightGray, fontSize = 12.sp)
                     }
                     if (pendingSourceChange) Text(playerMessage, color = Color.LightGray, fontSize = 12.sp)
