@@ -1046,14 +1046,18 @@ private const val isolateFinalPlayerScript = """
  * Cross-origin iframe controls remain provider-managed. */
 private fun findOptionsScript(): String = """
 (function(){
- function visible(x){return !!(x.getClientRects().length) && getComputedStyle(x).visibility !== 'hidden';}
- var nodes = [...document.querySelectorAll('button,a,[role=tab],[role=button],li,span,div,.nav-link,.server-item,.source-item,[class*="player-tab"],[class*="quality-item"]')].filter(visible);
- var players=[], quality=[];
- nodes.forEach(function(n){
-  var t=(n.textContent||'').trim().replace(/\s+/g,' ');
-  var m=t.match(/^Player\s*([1-9])$/i); if(m && !players.includes(m[1])) players.push(m[1]);
-  var q=t.match(/^(360|480|720|1080|1440|2160)\s*p?$/i); if(q && !quality.includes(q[1])) quality.push(q[1]);
+ var players=[],quality=[];
+ document.querySelectorAll('button,a,[role="tab"],[role="button"],li,span,div,p,strong,label,[class*="source"],[class*="quality"],[class*="server"]').forEach(function(n){
+   if(n.children.length>8)return;
+   var t=(n.textContent||'').trim().replace(/\s+/g,' ');
+   if(t.length>55)return;
+   var m=t.match(/^Player\s*([1-9])$/i);
+   if(m&&!players.includes(m[1]))players.push(m[1]);
+   var q=t.match(/^(360|480|720|1080|1440|2160)\s*p?$/i);
+   if(q&&!quality.includes(q[1]))quality.push(q[1]);
  });
+ players.sort(function(a,b){return +a-+b;});
+ quality.sort(function(a,b){return +a-+b;});
  return players.join(',')+'|'+quality.join(',');
 })();
 """
@@ -1062,14 +1066,17 @@ private fun selectOptionScript(kind: String, value: String): String {
     val safe = value.filter { it.isDigit() }
     val wanted = if (kind == "player") "Player $safe" else safe
     return """(function(){
-      var wanted='${wanted}';
-      var nodes=[...document.querySelectorAll('button,a,[role=tab],[role=button],li,span,div,.nav-link,.server-item,.source-item,[class*="player-tab"],[class*="quality-item"]')];
-      var n=nodes.find(function(el){
-        var t=(el.textContent||'').trim().replace(/\s+/g,' ');
-        return el.getClientRects().length && (t.toLowerCase() === wanted.toLowerCase() ||
-          (${if (kind == "quality") "true" else "false"} && t.toLowerCase()===wanted.toLowerCase()+'p'));
+      var wanted='${wanted}'.toLowerCase();
+      var nodes=[...document.querySelectorAll('button,a,[role=tab],[role=button],li,span,div,p,strong,label,[class*="source"],[class*="quality"],[class*="server"]')];
+      var matches=nodes.filter(function(el){
+        var t=(el.textContent||'').trim().replace(/\s+/g,' ').toLowerCase();
+        return t===wanted || (${if (kind == "quality") "true" else "false"} && t===wanted+'p');
       });
-      if(n){n.click();return 'selected';}return 'unavailable';
+      if(!matches.length)return 'unavailable';
+      matches.sort(function(a,b){return a.querySelectorAll('*').length-b.querySelectorAll('*').length;});
+      var leaf=matches[0],control=leaf.closest('button,a,[role=tab],[role=button],li,[onclick],[class*="source-item"],[class*="quality-item"]')||leaf;
+      if(control && typeof control.click==='function'){control.click();return 'selected';}
+      return 'unavailable';
     })();"""
 }
 
@@ -1557,7 +1564,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                         Text("Checking whether 720p or 1080p is available for this episode…",
                             color = Color.LightGray, fontSize = 12.sp)
                     } else if (availableQualities.isEmpty() && groupedSources.distinctBy { it.quality }.size == 1) {
-                        Text("No additional authorized quality was confirmed for this episode.",
+                        Text("Only confirmed streams are playable directly; other website options must be requested.",
                             color = Color.LightGray, fontSize = 12.sp)
                     }
                     if (pendingSourceChange) Text(playerMessage, color = Color.LightGray, fontSize = 12.sp)
