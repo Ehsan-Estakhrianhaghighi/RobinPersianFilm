@@ -386,7 +386,14 @@ private fun RobinApp() {
                 LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 150.dp), modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(bottom = 24.dp), verticalArrangement = Arrangement.spacedBy(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     items(listed, key = { it.page }) { item ->
-                        Column(Modifier.background(panel, RoundedCornerShape(10.dp)).clickable { selected = item; chosenEpisode = null; episodeList = emptyList() }.focusable().padding(8.dp)) {
+                        var cardFocused by remember { mutableStateOf(false) }
+                        Column(Modifier
+                            .onFocusChanged { cardFocused = it.isFocused }
+                            .border(if (cardFocused) 3.dp else 1.dp,
+                                if (cardFocused) accent else panel, RoundedCornerShape(10.dp))
+                            .background(panel, RoundedCornerShape(10.dp))
+                            .clickable { selected = item; chosenEpisode = null; episodeList = emptyList() }
+                            .padding(8.dp)) {
                             if (item.poster != null) AsyncImage(model = ImageRequest.Builder(context).data(item.poster).crossfade(true).build(),
                                 contentDescription = item.title, modifier = Modifier.fillMaxWidth().height(200.dp))
                             else Box(Modifier.fillMaxWidth().height(200.dp), contentAlignment = Alignment.Center) { Text("🎬", fontSize = 40.sp) }
