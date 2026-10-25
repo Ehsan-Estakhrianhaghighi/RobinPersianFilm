@@ -977,57 +977,61 @@ private const val scrollToVideoSourcesScript = """
 private const val isolateFinalPlayerScript = """
 (function(){
   if(location.pathname.indexOf('/play-hq-player')!==0)return 'other-page';
-  var visible=function(el){if(!el)return false;var r=el.getBoundingClientRect();return r.width>15&&r.height>10;};
-  var labels=[...document.querySelectorAll('button,a,[role="tab"],[role="button"],li,span,div')];
-  var tab=labels.find(function(el){return visible(el)&&(el.textContent||'').trim().toLowerCase()==='player 1';});
-  if(!tab)return 'tabs-loading';
-  var tabs=['player 1','player 2','player 3'];
-  var group=tab;
-  for(var i=0;i<5&&group&&group.parentElement;i++,group=group.parentElement){
-    var t=(group.textContent||'').toLowerCase();
-    if(tabs.every(function(x){return t.includes(x);})){break;}
+  function visible(el){
+    if(!el||!el.getBoundingClientRect)return false;
+    var r=el.getBoundingClientRect(),cs=getComputedStyle(el);
+    return r.width>10&&r.height>8&&cs.display!=='none'&&cs.visibility!=='hidden';
   }
-  if(!group)return 'tabs-loading';
-  var dialog=[...document.querySelectorAll('[role="dialog"],[aria-modal="true"],.modal,[class*="unlock"],[id*="unlock"]')].find(function(el){
-    var t=(el.textContent||'').toLowerCase();
-    return visible(el)&&t.includes('unlock more content')&&t.includes('view a short ad');
-  });
-  // Only the visible access prompt itself is protected. A stale Android flag
-  // must never stop cleanup after a completed or dismissed offerwall.
-  if(dialog)return 'unlock-visible';
-  var css=document.getElementById('robin-isolate-final-player');
-  if(!css){
-    css=document.createElement('style');css.id='robin-isolate-final-player';
-    css.textContent='[data-robin-prior="1"]{display:none!important;height:0!important;min-height:0!important;margin:0!important;padding:0!important;overflow:hidden!important;}';
-    (document.head||document.documentElement).appendChild(css);
+  function exact(s){
+    return [...document.querySelectorAll('button,a,[role="tab"],[role="button"],li,span,div')]
+      .find(function(n){return visible(n)&&(n.textContent||'').trim().toLowerCase()===s;});
   }
-  var protectedNode=function(el){
-    if(!el||el.nodeType!==1)return true;
-    if(el.matches('script,style,link,noscript'))return true;
-    var t=(el.textContent||'').toLowerCase().slice(0,2500);
+  var a=exact('player 1'),b=exact('player 2'),c=exact('player 3');
+  if(!a||!b||!c)return 'tabs-loading';
+  // Find the smallest container containing all three tabs, rather than
+  // climbing to a page-wide container that also holds the advertisements.
+  var group=a;
+  while(group&&group!==document.body&&!(group.contains(b)&&group.contains(c)))
+    group=group.parentElement;
+  if(!group||group===document.body)return 'tabs-loading';
+  function unlock(n){
+    if(!n||!n.querySelectorAll)return false;
+    var t=(n.textContent||'').toLowerCase();
     if(t.includes('unlock more content')&&t.includes('view a short ad'))return true;
-    if(el.querySelector('[role="dialog"],[aria-modal="true"]'))return true;
-    return !!el.querySelector('video,[id*="jwplayer"],[class*="jwplayer"]');
-  };
-  var child=group, hidden=0;
-  // Hide the actual website sections preceding the tabs, not just their ad
-  // iframe. This also catches unlabelled stacked sponsor/anchor containers.
-  while(child&&child.parentElement&&child.parentElement!==document.documentElement){
+    return [...n.querySelectorAll('[role="dialog"],[aria-modal="true"]')].some(function(d){
+      var x=(d.textContent||'').toLowerCase();
+      return visible(d)&&x.includes('unlock more content');
+    });
+  }
+  // Keep any access prompt on-screen. Do not suppress provider access checks.
+  if([...document.querySelectorAll('[role="dialog"],[aria-modal="true"],.modal,.modal-dialog,[class*="unlock"]')]
+       .some(function(d){return visible(d)&&unlock(d);}))return 'unlock-visible';
+  var style=document.getElementById('robin-player-layout');
+  if(!style){
+    style=document.createElement('style');style.id='robin-player-layout';
+    style.textContent='[data-robin-hide-before-player="yes"]{display:none!important;height:0!important;min-height:0!important;max-height:0!important;overflow:hidden!important;margin:0!important;padding:0!important;} html,body{overflow-y:auto!important;scroll-behavior:auto!important;}';
+    (document.head||document.documentElement).appendChild(style);
+  }
+  var hidden=0,child=group;
+  while(child&&child.parentElement){
     var parent=child.parentElement;
-    for(var sib=parent.firstElementChild;sib&&sib!==child;sib=sib.nextElementSibling){
-      if(protectedNode(sib))continue;
-      if(sib.getAttribute('data-robin-prior')!=='1'){
-        sib.setAttribute('data-robin-prior','1');hidden++;
+    for(var sibling=parent.firstElementChild;sibling&&sibling!==child;sibling=sibling.nextElementSibling){
+      if(unlock(sibling)||sibling.matches('script,style,link,noscript'))continue;
+      // Only collapse preceding page chrome and advertisements, not a playing video.
+      if(sibling.querySelector('video,[class*="jwplayer"],[id*="jwplayer"]'))continue;
+      if(sibling.dataset.robinHideBeforePlayer!=='yes'){
+        sibling.dataset.robinHideBeforePlayer='yes';hidden++;
       }
     }
     if(parent===document.body)break;
     child=parent;
   }
-  document.documentElement.style.setProperty('scroll-behavior','auto','important');
-  document.body.style.setProperty('overflow-y','auto','important');
-  var top=group.getBoundingClientRect().top+(window.scrollY||document.documentElement.scrollTop||0);
-  window.scrollTo(0,Math.max(0,top-8));
-  if(group.scrollIntoView)group.scrollIntoView({block:'start',behavior:'instant'});
+  // Some Google ad anchors are fixed overlays and aren't ordinary siblings.
+  document.querySelectorAll('ins.adsbygoogle,.google-auto-placed,[id*="google_adsense_anchor"],[id^="aswift_"],[id^="google_ads_iframe"]').forEach(function(el){
+    if(!unlock(el)&&!el.contains(group))el.dataset.robinHideBeforePlayer='yes';
+  });
+  var position=group.getBoundingClientRect().top+window.scrollY;
+  window.scrollTo(0,Math.max(0,position-8));
   return 'player-first:'+hidden;
 })();
 """
