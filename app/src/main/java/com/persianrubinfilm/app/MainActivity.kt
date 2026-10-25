@@ -52,8 +52,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import kotlinx.coroutines.Dispatchers
@@ -1133,6 +1131,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     var nativeSources by remember(url) { mutableStateOf<List<NativeVideoSource>>(emptyList()) }
     var nativeChoice by remember(url) { mutableStateOf<NativeVideoSource?>(null) }
     var nativeFullscreen by remember(url) { mutableStateOf(false) }
+    var pendingSourceChange by remember(url) { mutableStateOf(false) }
     var playerMessage by remember(url) { mutableStateOf("Opening the final player…") }
     val nativePlayer = remember(url) { ExoPlayer.Builder(context).build() }
     DisposableEffect(nativePlayer) {
@@ -1178,7 +1177,8 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
         if (nativeSources.none { it.url == rawUrl }) {
             nativeSources = (nativeSources + source).takeLast(24)
         }
-        if (wasRequested && nativeChoice == null && !accessPromptActive) {
+        if (wasRequested && (nativeChoice == null || pendingSourceChange) && !accessPromptActive) {
+            pendingSourceChange = false
             nativeChoice = nativeSources.firstOrNull { it.url == rawUrl } ?: source
             playerMessage = "Playing ${quality}p natively"
         }
@@ -1420,6 +1420,21 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
             web.onResume()
         }
     }
+    fun chooseProviderOption(kind: String, value: String) {
+        pendingSourceChange = true
+        // The original provider page is retained solely for authorized option
+        // selection. Resume it briefly to let the actual player make a new request.
+        web.onResume()
+        web.evaluateJavascript(selectOptionScript(kind, value)) { raw ->
+            if (!raw.contains("selected")) {
+                pendingSourceChange = false
+                playerMessage = "This ${kind} option is not accessible in the provider player"
+                if (nativeChoice != null) web.onPause()
+            } else {
+                playerMessage = "Checking available ${kind} ${value} stream…"
+            }
+        }
+    }
     DisposableEffect(web) { onDispose { web.stopLoading(); web.onPause(); web.destroy() } }
     BackHandler(nativeFullscreen) { nativeFullscreen = false }
     BackHandler(customView != null) {
@@ -1435,21 +1450,26 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     }
     Box(modifier.background(Color.Black)) {
         Column(Modifier.fillMaxSize()) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            if (!nativeFullscreen) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = onExit) { Text("← Back to details") }
                 Spacer(Modifier.weight(1f))
                 Text("RobinPersianFilm Player", fontSize = 14.sp, color = Color.LightGray)
             }
-            if (customView == null) {
+            if (customView == null && !nativeFullscreen) {
                 if (nativeSources.isNotEmpty()) {
                     Text("Video options", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
                     val groupedSources = nativeSources.distinctBy { it.url }
-                    Text("Player / source", color = Color.LightGray, fontSize = 12.sp)
+                    Text("Available sources", color = Color.LightGray, fontSize = 12.sp)
                     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
                         groupedSources.forEachIndexed { index, candidate ->
                             TextButton(onClick = { nativeChoice = candidate }) {
                                 Text("${if (nativeChoice?.url == candidate.url) "✓ " else ""}Source ${index + 1}",
                                     color = if (nativeChoice?.url == candidate.url) Color.White else accent)
+                            }
+                        }
+                        availablePlayers.forEach { number ->
+                            TextButton(onClick = { chooseProviderOption("player", number) }) {
+                                Text("Player $number", color = accent)
                             }
                         }
                     }
@@ -1462,11 +1482,17 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                                     color = if (nativeChoice?.quality == candidate.quality) Color.White else accent)
                             }
                         }
+                        availableQualities.filter { quality -> groupedSources.none { it.quality == quality } }.forEach { quality ->
+                            TextButton(onClick = { chooseProviderOption("quality", quality) }) {
+                                Text("${quality}p · check", color = accent)
+                            }
+                        }
                     }
-                    if (groupedSources.size == 1) {
-                        Text("Only one authorized source and quality detected for this episode.",
+                    if (availableQualities.isEmpty() && groupedSources.size == 1) {
+                        Text("Other qualities are not yet exposed by this provider page.",
                             color = Color.LightGray, fontSize = 12.sp)
                     }
+                    if (pendingSourceChange) Text(playerMessage, color = Color.LightGray, fontSize = 12.sp)
                     if (nativeChoice != null) {
                         TextButton(onClick = { nativeFullscreen = true }) {
                             Text("⛶ Full screen", color = Color.White)
@@ -1504,6 +1530,12 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                 }
             }
             Box(Modifier.fillMaxSize().weight(1f)) {
+                if (nativeFullscreen && nativeChoice != null) {
+                    TextButton(
+                        onClick = { nativeFullscreen = false },
+                        modifier = Modifier.align(Alignment.TopEnd)
+                    ) { Text("Exit full screen", color = Color.White) }
+                }
                 if (nativeChoice != null) {
                     AndroidView(
                         factory = { PlayerView(it).apply {
@@ -1528,29 +1560,6 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                             Text("Checking the selected video's playback page", color = Color.LightGray, fontSize = 12.sp)
                         }
                     }
-                }
-            }
-        }
-        if (nativeFullscreen && nativeChoice != null) {
-            Dialog(
-                onDismissRequest = { nativeFullscreen = false },
-                properties = DialogProperties(usePlatformDefaultWidth = false)
-            ) {
-                Box(Modifier.fillMaxSize().background(Color.Black)) {
-                    AndroidView(
-                        factory = { PlayerView(it).apply {
-                            player = nativePlayer
-                            useController = true
-                            isFocusable = true
-                            requestFocus()
-                        } },
-                        update = { it.player = nativePlayer },
-                        modifier = Modifier.fillMaxSize()
-                    )
-                    TextButton(
-                        onClick = { nativeFullscreen = false },
-                        modifier = Modifier.align(Alignment.TopEnd)
-                    ) { Text("Exit full screen", color = Color.White) }
                 }
             }
         }
