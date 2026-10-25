@@ -655,153 +655,140 @@ private const val playerAdCleaner = """
  * FarsiPlex sometimes builds its header AFTER the document load, hence the observer. */
 private const val compactPlaybackScript = """
 (function(){
-  if (window.__robinCompactPlayerInstalled) { window.__robinCleanPlayerPage(); return 'refreshed'; }
-  window.__robinCompactPlayerInstalled = true;
+  if(location.pathname.replace(/\/+$/,'')!=='/play-hq-player') return 'not-final';
+  if(window.__robinPlayerOnlyInstalled) { return window.__robinPlayerOnlyClean(); }
+  window.__robinPlayerOnlyInstalled=true;
   var style=document.createElement('style');
-  style.id='robin-final-player-only';
+  style.id='robin-player-only-css';
   style.textContent=`
-    /* Hide the FarsiPlex website chrome; NOT the app's Back button. */
-    body > header, header[role="banner"], [role="banner"],
-    #header, #site-header, #masthead, #navbar,
-    .site-header, .main-header, .header-wrap, .header-area,
-    .header-main, .header-inner, .mobile-header, .mobile-nav,
-    .site-navigation, .main-navigation, .header-menu,
-    .navbar, .navbar-header, .navigation-bar,
-    .site-branding, .header-branding, .header-logo,
-    .site-logo, .custom-logo-link, .logo-area, .logo-container,
-    .menu-toggle, .nav-toggle, .search-toggle, .hamburger,
-    .mobile-menu, .header-search, .header-menu,
-    footer.site-footer, .site-footer, #colophon,
-    .breadcrumbs, .breadcrumb, aside.widget-area, .sidebar {
-      display:none!important; max-height:0!important; margin:0!important;
-      padding:0!important; overflow:hidden!important;
-    }
-    [data-robin-site-chrome="hidden"], [data-robin-unrelated="hidden"] {
-      display:none!important; max-height:0!important; margin:0!important;
-      padding:0!important; overflow:hidden!important;
-    }
-    html,body { scroll-behavior:auto!important; }
-    body { padding-top:0!important; }
+    [data-robin-pruned="yes"] { display:none!important; visibility:hidden!important;
+      height:0!important; max-height:0!important; min-height:0!important;
+      margin:0!important; padding:0!important; border:0!important; }
+    html,body { overflow-y:auto!important; touch-action:pan-y!important;
+      overscroll-behavior-y:auto!important; scroll-behavior:auto!important; }
+    body { padding-top:0!important; margin-top:0!important; }
   `;
   (document.head||document.documentElement).appendChild(style);
-  var danger='[role="dialog"],[aria-modal="true"],.modal,.modal-dialog,.unlock-modal,[class*="unlock"],[id*="unlock"]';
-  function containsPlayback(el){
-    if (!el) return false;
-    var text=(el.textContent||'').slice(0,9000);
-    return /video sources|player\s*1\s*player\s*2/i.test(text) ||
-      !!el.querySelector('video,[class*="jwplayer"],[id*="jwplayer"]');
+  function txt(el){return (el.textContent||'').replace(/\s+/g,' ').trim();}
+  function shown(el){if(!el || !el.getBoundingClientRect)return false;
+    var r=el.getBoundingClientRect(),st=getComputedStyle(el);
+    return r.width>12&&r.height>8&&st.display!=='none'&&st.visibility!=='hidden';}
+  function isUnlock(el){
+    if(!el||!el.querySelectorAll)return false;
+    // Do not prune or block FarsiPlex's required access prompt, including an
+    // unlock dialogue dynamically mounted outside the website's player panel.
+    var sel='[role="dialog"],[aria-modal="true"],.modal,.modal-dialog,[class*="unlock"],[id*="unlock"]';
+    var nodes=[];
+    if(el.matches&&el.matches(sel)) nodes.push(el);
+    el.querySelectorAll(sel).forEach(function(n){nodes.push(n);});
+    return nodes.some(function(n){var t=txt(n).toLowerCase();
+      return t.indexOf('unlock more content')>=0&&t.indexOf('view a short ad')>=0;});
   }
-  function containsUnlock(el){
-    if(!el) return false;
-    if (el.matches(danger) || el.querySelector(danger)) return true;
-    var text=(el.textContent||'').slice(0,1700);
-    return /unlock more content/i.test(text) && /view a short ad/i.test(text);
+  function prune(el){
+    if(!el||!el.matches||el===document.body||el===document.documentElement)return;
+    if(el.matches('script,style,noscript,link,meta'))return;
+    if(isUnlock(el))return;
+    el.setAttribute('data-robin-pruned','yes');
   }
-  function hide(el,kind){
-    if(!el || el===document.body || el===document.documentElement || containsUnlock(el) || containsPlayback(el)) return false;
-    el.setAttribute(kind==='article'?'data-robin-unrelated':'data-robin-site-chrome','hidden');
-    return true;
-  }
-  function nearTop(el){
-    var r=el.getBoundingClientRect();
-    return r.width>0 && r.height>0 && r.top<450 && r.bottom> -10;
-  }
-  function looksLikeSiteBrand(el){
-    var label=(el.getAttribute('alt')||'')+' '+(el.getAttribute('title')||'')+' '+
-      (el.getAttribute('aria-label')||'')+' '+(el.textContent||'').slice(0,90);
-    var cl=(String(el.className||'')+' '+(el.id||'')).toLowerCase();
-    var src=(el.getAttribute('src')||'').toLowerCase();
-    return /farsi\s*plex|فارسی\s*plex/i.test(label) ||
-      (/(logo|branding)/.test(cl) && /(farsi|logo)/.test(src+' '+label.toLowerCase()));
-  }
-  function cleanNavigation(){
-    /* The actual website sometimes uses a plain div for its top logo/menu/search
-       rather than the standard WordPress header classes. Find that row. */
-    var brands=document.querySelectorAll('img[alt],a[href], [class*="logo"],[class*="brand"], [id*="logo"]');
-    for(var i=0;i<brands.length;i++){
-      var logo=brands[i];
-      if (!nearTop(logo) || !looksLikeSiteBrand(logo)) continue;
-      var row=null, parent=logo;
-      for(var step=0;step<5 && parent && parent!==document.body;step++,parent=parent.parentElement){
-        var r=parent.getBoundingClientRect();
-        if(r.height>15 && r.height<230 && r.width>=Math.min(window.innerWidth*0.65,320) &&
-           r.top<450 && !containsPlayback(parent) && !containsUnlock(parent)) row=parent;
-      }
-      // If the site's toolbar has its own row, remove it as a unit; otherwise
-      // at least remove the logo itself (without removing the video container).
-      hide(row || logo,'chrome');
+  function exactControl(label){
+    var nodes=document.querySelectorAll('button,a,[role="tab"],[role="button"],li,span,div');
+    for(var i=0;i<nodes.length;i++){
+      var n=nodes[i];
+      if(shown(n)&&txt(n).toLowerCase()===label.toLowerCase()) return n;
     }
-    /* Sometimes the logo is a background image and has no alt/title.
-       Hide the site-home link near the top, but never the player/quality row. */
-    document.querySelectorAll('a[href],img[src],input[type="search"]').forEach(function(el){
-      if(!nearTop(el))return;
-      var raw=((el.getAttribute('href')||'')+' '+(el.getAttribute('src')||'')+' '+
-        (el.getAttribute('alt')||'')+' '+(el.className||'')).toLowerCase();
-      var siteHome=false;
-      try{var u=new URL(el.getAttribute('href')||'#',location.href);
-        siteHome=u.hostname===location.hostname && (u.pathname==='/'||u.pathname==='/explore/');}
-      catch(e){}
-      if(siteHome || /farsiplex.*logo|logo.*farsiplex|فارسی.*plex/.test(raw)){
-        var parent=el.closest('a')||el;
-        hide(parent,'chrome');
+    return null;
+  }
+  function tabsContainer(first,second){
+    var node=first;
+    for(var i=0;i<6&&node&&node!==document.body;i++,node=node.parentElement){
+      if(node.contains(second)&&txt(node).length<550){
+        var r=node.getBoundingClientRect();
+        if(r.height>20&&r.height<380)return node;
       }
-    });
-    /* Independently hide menu/search affordances when the logo isn't an image. */
-    var triggers=document.querySelectorAll(
-      '.menu-toggle,.search-toggle,.mobile-menu-toggle,.navbar-toggle,'+
-      '.hamburger,.hamburger-menu,[aria-label*="menu" i],[aria-label*="search" i],'+
-      '[class*="header-search"],[class*="header-menu"],'+
-      'header form[role="search"], header input[type="search"]');
-    for(var j=0;j<triggers.length;j++){
-      var item=triggers[j];
-      if(!nearTop(item)) continue;
-      var container=item.closest('button,a,[role="button"]')||item;
-      hide(container,'chrome');
     }
-    document.querySelectorAll('header,nav,[role="banner"],.site-header,.main-header').forEach(function(n){
-      var r=n.getBoundingClientRect();
-      if(r.top<450 && r.height<260) hide(n,'chrome');
+    // Do not guess an ancestor: the fallback must never hide Player 2/3.
+    return null;
+  }
+  // Prune siblings BEFORE the real player-tabs row at each ancestor level.
+  // Unlike generic ad filters, this also removes ad wrappers that do not
+  // advertise themselves with CSS classes (including nested banner slots).
+  function pruneBefore(node){
+    var cur=node;
+    for(var depth=0;depth<16&&cur&&cur!==document.body;depth++,cur=cur.parentElement){
+      var parent=cur.parentElement;
+      if(!parent)break;
+      for(var n=parent.firstElementChild;n&&n!==cur;n=n.nextElementSibling) prune(n);
+    }
+  }
+  function pruneAfter(node){
+    var cur=node;
+    for(var depth=0;depth<16&&cur&&cur!==document.body;depth++,cur=cur.parentElement){
+      for(var n=cur.nextElementSibling;n;n=n.nextElementSibling) prune(n);
+    }
+  }
+  function activeUnlock(){
+    var sel='[role="dialog"],[aria-modal="true"],.modal,.modal-dialog,[class*="unlock"],[id*="unlock"]';
+    return Array.from(document.querySelectorAll(sel)).some(function(el){
+      var t=txt(el).toLowerCase();
+      return shown(el)&&t.includes('unlock more content')&&t.includes('view a short ad');
     });
   }
-  function cleanArticles(){
-    /* FarsiPlex currently appends an unrelated movie-list article below the
-       real player/source list. Do not remove an article that owns the player. */
-    document.querySelectorAll('h1,h2,h3,h4').forEach(function(heading){
-      var title=(heading.textContent||'').trim();
-      if(!/^the 15 best iranian movies of all time/i.test(title)) return;
-      var section=heading.closest('article,.post,.blog-post,.entry-content,.post-content,.article-content');
-      if(section && hide(section,'article')) return;
-      // The site sometimes places this article in generic divs. Walk up to
-      // the largest dedicated article container, stopping BEFORE the player.
-      var candidate=heading, ancestor=heading.parentElement;
-      for(var depth=0;depth<6 && ancestor && ancestor!==document.body;depth++,ancestor=ancestor.parentElement){
-        if(containsPlayback(ancestor) || containsUnlock(ancestor)) break;
-        if((ancestor.textContent||'').length>22000) break;
-        candidate=ancestor;
+  function unstickScroll(){
+    // An invisible unlock element often remains in the DOM after the popup
+    // closes. Its mere existence must NOT keep the document scroll-locked.
+    if(activeUnlock())return;
+    for(var root of [document.documentElement,document.body]){
+      if(!root)continue;
+      root.style.setProperty('overflow-y','auto','important');
+      root.style.setProperty('touch-action','pan-y','important');
+      if(getComputedStyle(root).position==='fixed')
+        root.style.setProperty('position','static','important');
+    }
+    document.querySelectorAll('[style*="overflow: hidden"],[style*="overflow:hidden"],[style*="overflow-y: hidden"]').forEach(function(el){
+      if(el===document.body||el===document.documentElement)return;
+      if(isUnlock(el))return;
+      if(el.scrollHeight>el.clientHeight+20){
+        el.style.setProperty('overflow-y','auto','important');
+        el.style.setProperty('touch-action','pan-y','important');
       }
-      hide(candidate,'article');
     });
   }
-  var cleaning=false;
-  window.__robinCleanPlayerPage=function(){
-    if(cleaning) return;
-    cleaning=true;
-    try { cleanNavigation(); cleanArticles(); } finally { cleaning=false; }
+  window.__robinPlayerOnlyClean=function(){
+    var p1=exactControl('Player 1'),p2=exactControl('Player 2');
+    if(!p1||!p2)return 'waiting-tabs';
+    var row=tabsContainer(p1,p2);
+    if(!row)return 'waiting-layout';
+    row.setAttribute('data-robin-player-tabs','yes');
+    pruneBefore(row);
+    // A separate article follows the video sources. Trim that content only
+    // when a quality/source section can be found reliably.
+    var last=null;
+    for(var quality of ['2160','1440','1080','720','480','360']){
+      var el=exactControl(quality)||exactControl(quality+'p');
+      if(el){last=el;break;}
+    }
+    if(last){
+      var end=last.closest('li,a,button,[role="button"]')||last.parentElement||last;
+      end.setAttribute('data-robin-quality-anchor','yes');
+      // Only remove following siblings within the article region, not across
+      // the whole body, where the legitimate access dialog may be appended.
+      for(var d=0,node=end;d<3&&node&&node!==document.body;d++,node=node.parentElement){
+        for(var n=node.nextElementSibling;n;n=n.nextElementSibling){
+          if(n.querySelector&&n.querySelector('[data-robin-player-tabs]'))continue;
+          prune(n);
+        }
+      }
+    }
+    unstickScroll();
+    return last?'clean-player-and-quality':'clean-player';
   };
-  window.__robinCleanPlayerPage();
-  var scheduled=false, lastScan=Date.now();
-  var observer=new MutationObserver(function(){
-    if(scheduled) return;
+  var scheduled=false;
+  new MutationObserver(function(){
+    if(scheduled)return;
     scheduled=true;
-    // Player frameworks frequently modify the DOM. Throttle layout checks
-    // to avoid unnecessary CPU use and video stuttering on Fire TV.
-    var wait=Math.max(350,1500-(Date.now()-lastScan));
-    setTimeout(function(){
-      scheduled=false;lastScan=Date.now();window.__robinCleanPlayerPage();
-    },wait);
-  });
-  observer.observe(document.documentElement,{childList:true,subtree:true});
-  return 'installed';
+    setTimeout(function(){scheduled=false;window.__robinPlayerOnlyClean();},400);
+  }).observe(document.documentElement,{childList:true,subtree:true});
+  return window.__robinPlayerOnlyClean();
 })();
 """
 
@@ -809,7 +796,7 @@ private const val compactPlaybackScript = """
  * into view rather than making the viewer search through the article. */
 private fun focusAvailablePlayerScript(): String = """
 (function(){
-  if(window.__robinPlayerLocated) return 'located';
+  // Allow retry after site layout and advertisements change.
   function shown(el){
     if(!el || !el.getBoundingClientRect) return false;
     var r=el.getBoundingClientRect(), st=getComputedStyle(el);
@@ -865,7 +852,7 @@ private const val restorePlayerScrollScript = """
 private fun findOptionsScript(): String = """
 (function(){
  function visible(x){return !!(x.getClientRects().length) && getComputedStyle(x).visibility !== 'hidden';}
- var nodes = [...document.querySelectorAll('button,a,[role=tab],[role=button],li,.nav-link,.server-item,.source-item,[class*="player-tab"],[class*="quality-item"]')].filter(visible);
+ var nodes = [...document.querySelectorAll('button,a,[role=tab],[role=button],li,span,div,.nav-link,.server-item,.source-item,[class*="player-tab"],[class*="quality-item"]')].filter(visible);
  var players=[], quality=[];
  nodes.forEach(function(n){
   var t=(n.textContent||'').trim().replace(/\s+/g,' ');
@@ -881,7 +868,7 @@ private fun selectOptionScript(kind: String, value: String): String {
     val wanted = if (kind == "player") "Player $safe" else safe
     return """(function(){
       var wanted='${wanted}';
-      var nodes=[...document.querySelectorAll('button,a,[role=tab],[role=button],li,.nav-link,.server-item,.source-item,[class*="player-tab"],[class*="quality-item"]')];
+      var nodes=[...document.querySelectorAll('button,a,[role=tab],[role=button],li,span,div,.nav-link,.server-item,.source-item,[class*="player-tab"],[class*="quality-item"]')];
       var n=nodes.find(function(el){
         var t=(el.textContent||'').trim().replace(/\s+/g,' ');
         return el.getClientRects().length && (t.toLowerCase() === wanted.toLowerCase() ||
@@ -935,15 +922,19 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                     evaluateJavascript("""(function(){
                       var amount=$pixels;
                       var root=document.scrollingElement||document.documentElement;
-                      var candidates=[root,...document.querySelectorAll('main,[class*="content"],[class*="scroll"]')];
+                      var candidates=[root,document.body,...document.querySelectorAll('main,[class*="content"],[class*="scroll"]')];
                       var target=candidates.find(function(el){
                         if(!el || !el.scrollHeight)return false;
-                        var st=getComputedStyle(el);
-                        return el.scrollHeight>el.clientHeight+50 &&
-                          (el===root || /auto|scroll/.test(st.overflowY));
+                        return el.scrollHeight>el.clientHeight+30;
                       });
-                      if(target)target.scrollTop+=amount;
-                      else window.scrollBy(0,amount);
+                      if(target){target.style.setProperty('overflow-y','auto','important');target.scrollTop+=amount;}
+                      window.scrollBy(0,amount);
+                      // If the host is still stuck, jump to genuine site options.
+                      var chosen=(amount>0?'480':'Player 1');
+                      var labels=[...document.querySelectorAll('a,button,li,span,div')];
+                      var el=labels.find(function(n){return(n.textContent||'').trim()===chosen;});
+                      if(el && Math.abs(window.scrollY)<5 && root.scrollHeight>innerHeight+40)
+                         el.scrollIntoView({block:'center',behavior:'instant'});
                     })();""", null)
                     true
                 } else false
