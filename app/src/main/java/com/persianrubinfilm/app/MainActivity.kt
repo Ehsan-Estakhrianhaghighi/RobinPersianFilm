@@ -1425,6 +1425,10 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
         // The original provider page is retained solely for authorized option
         // selection. Resume it briefly to let the actual player make a new request.
         web.onResume()
+        web.evaluateJavascript(
+            """(function(){document.querySelectorAll('video,audio').forEach(function(m){try{m.muted=true;m.volume=0;}catch(e){}});})();""",
+            null
+        )
         web.evaluateJavascript(selectOptionScript(kind, value)) { raw ->
             if (!raw.contains("selected")) {
                 pendingSourceChange = false
@@ -1530,12 +1534,6 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                 }
             }
             Box(Modifier.fillMaxSize().weight(1f)) {
-                if (nativeFullscreen && nativeChoice != null) {
-                    TextButton(
-                        onClick = { nativeFullscreen = false },
-                        modifier = Modifier.align(Alignment.TopEnd)
-                    ) { Text("Exit full screen", color = Color.White) }
-                }
                 if (nativeChoice != null) {
                     AndroidView(
                         factory = { PlayerView(it).apply {
@@ -1550,6 +1548,12 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                     )
                 } else {
                     AndroidView(factory = { web }, modifier = Modifier.fillMaxSize())
+                }
+                if (nativeFullscreen && nativeChoice != null) {
+                    TextButton(
+                        onClick = { nativeFullscreen = false },
+                        modifier = Modifier.align(Alignment.TopEnd)
+                    ) { Text("Exit full screen", color = Color.White) }
                 }
                 if (!showWebContent && nativeChoice == null) {
                     Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
