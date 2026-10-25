@@ -11,6 +11,11 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.media3.common.MediaItem
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.PlayerView
+import org.json.JSONArray
+import org.json.JSONTokener
 import kotlinx.coroutines.delay
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
@@ -1060,6 +1065,48 @@ private fun selectOptionScript(kind: String, value: String): String {
     })();"""
 }
 
+private data class NativeVideoSource(val label: String, val url: String, val quality: String)
+
+/** Only discover media URLs already exposed to the user's authorized browser page.
+ * No token generation, ad-unlock circumvention or cross-origin iframe inspection.
+ * Native playback is optional because some hosts require their embedded player. */
+private const val discoverNativeVideoScript = """
+(function(){
+  if(location.pathname.indexOf('/play-hq-player')!==0)return '[]';
+  var modal=[...document.querySelectorAll('[role="dialog"],[aria-modal="true"],.modal,[class*="unlock"]')].some(function(n){
+    var text=(n.textContent||'').toLowerCase();
+    var rect=n.getBoundingClientRect();
+    return rect.width>40&&rect.height>40&&text.includes('unlock more content')&&text.includes('view a short ad');
+  });
+  if(modal)return '[]';
+  var found=[],seen={};
+  var media=/\\.(mp4|m3u8|mpd)(?:[?#]|$)/i;
+  function register(url,el){
+    if(!url||!media.test(url))return;
+    var p=el,steps=0;
+    while(p&&steps++<5){
+      var cls=String(p.className||'')+' '+String(p.id||'');
+      if(/advert|adsbygoogle|google_ads|banner-ad|sponsor|offerwall/i.test(cls))return;
+      p=p.parentElement;
+    }
+    try{
+      var u=new URL(url,location.href);
+      if(u.protocol!=='https:'||seen[u.href])return;
+      seen[u.href]=1;
+      var near=el.closest('[class*="source"],[class*="quality"],[class*="player"],li')||el.parentElement;
+      var nearby=(near&&near.textContent||'').trim().slice(0,120);
+      var q=(nearby.match(/(?:360|480|720|1080|1440|2160)\\s*p?/i)||u.pathname.match(/(?:360|480|720|1080|1440|2160)(?=\\D|$)/)||[])[0]||'Auto';
+      found.push({label:nearby.length<45&&nearby?nearby:'Video source '+(found.length+1),url:u.href,quality:q});
+    }catch(e){}
+  }
+  document.querySelectorAll('video,video source,a[href],source[src]').forEach(function(n){
+    register(n.currentSrc||n.getAttribute('src')||n.getAttribute('href'),n);
+    if(n.tagName==='VIDEO')register(n.getAttribute('src'),n);
+  });
+  return JSON.stringify(found.slice(0,24));
+})();
+"""
+
 private fun isFinalPlayerPage(url: String?): Boolean = try {
     val path = URI(url.orEmpty()).path?.lowercase().orEmpty().trimEnd('/')
     path == "/play-hq-player"
@@ -1075,6 +1122,20 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     var availableQualities by remember(url) { mutableStateOf<List<String>>(emptyList()) }
     var selectedPlayer by remember(url) { mutableStateOf("") }
     var selectedQuality by remember(url) { mutableStateOf("") }
+    var nativeSources by remember(url) { mutableStateOf<List<NativeVideoSource>>(emptyList()) }
+    var nativeChoice by remember(url) { mutableStateOf<NativeVideoSource?>(null) }
+    val nativePlayer = remember(url) { ExoPlayer.Builder(context).build() }
+    DisposableEffect(nativePlayer) { onDispose { nativePlayer.release() } }
+    LaunchedEffect(nativeChoice) {
+        val choice = nativeChoice
+        if (choice != null) {
+            nativePlayer.setMediaItem(MediaItem.fromUri(choice.url))
+            nativePlayer.prepare()
+            nativePlayer.playWhenReady = true
+        } else {
+            nativePlayer.stop()
+        }
+    }
     var playerMessage by remember(url) { mutableStateOf("Opening the final player…") }
     var accessPromptActive by remember(url) { mutableStateOf(false) }
     // Cover every intermediate WebView page with an app-owned loading surface.
@@ -1247,6 +1308,23 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                 web.evaluateJavascript(restorePlayerScrollScript, null)
                 web.evaluateJavascript(reduceFinalAdSpaceScript, null)
                 web.evaluateJavascript(isolateFinalPlayerScript, null)
+                web.evaluateJavascript(discoverNativeVideoScript) { raw ->
+                    try {
+                        val decoded = JSONTokener(raw).nextValue() as? String ?: "[]"
+                        val array = JSONArray(decoded)
+                        val fresh = (0 until array.length()).mapNotNull { idx ->
+                            val obj = array.optJSONObject(idx) ?: return@mapNotNull null
+                            val mediaUrl = obj.optString("url")
+                            if (!mediaUrl.startsWith("https://")) return@mapNotNull null
+                            NativeVideoSource(
+                                obj.optString("label", "Video source"),
+                                mediaUrl,
+                                obj.optString("quality", "Auto")
+                            )
+                        }
+                        nativeSources = fresh.distinctBy { it.url }
+                    } catch (_: Exception) { /* Keep site player if source inspection fails. */ }
+                }
                 web.evaluateJavascript(findOptionsScript()) { raw ->
                     val decoded = raw.removeSurrounding("\"").replace("\\n", "")
                     val parts = decoded.split('|')
@@ -1291,7 +1369,23 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                 Text("RobinPersianFilm Player", fontSize = 14.sp, color = Color.LightGray)
             }
             if (customView == null) {
-                if (availablePlayers.isNotEmpty()) {
+                if (nativeSources.isNotEmpty()) {
+                    Text("Native playback · choose a source and quality", color = Color.White, fontSize = 13.sp)
+                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                        nativeSources.forEachIndexed { index, candidate ->
+                            TextButton(onClick = { nativeChoice = candidate }) {
+                                val display = candidate.label.take(20).ifBlank { "Source ${index + 1}" }
+                                Text("${if (nativeChoice?.url == candidate.url) "✓ " else ""}$display · ${candidate.quality}", color = Color.White)
+                            }
+                        }
+                        if (nativeChoice != null) {
+                            TextButton(onClick = { nativeChoice = null }) { Text("Website player") }
+                        }
+                    }
+                } else {
+                    Text("Native video sources not available yet; using website player.", color = Color.LightGray, fontSize = 12.sp)
+                }
+                if (nativeChoice == null && availablePlayers.isNotEmpty()) {
                     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
                         Text("Player:", color = Color.White, fontSize = 13.sp)
                         availablePlayers.forEach { number ->
@@ -1304,7 +1398,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                         }
                     }
                 }
-                if (availableQualities.isNotEmpty()) {
+                if (nativeChoice == null && availableQualities.isNotEmpty()) {
                     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
                         Text("Quality:", color = Color.White, fontSize = 13.sp)
                         availableQualities.forEach { number ->
@@ -1317,11 +1411,25 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                         }
                     }
                 }
-                Text(playerMessage, fontSize = 12.sp, color = Color.LightGray, maxLines = 2, modifier = Modifier.padding(bottom = 5.dp))
+                if (nativeChoice == null) Text(playerMessage, fontSize = 12.sp, color = Color.LightGray, maxLines = 2, modifier = Modifier.padding(bottom = 5.dp))
             }
             Box(Modifier.fillMaxSize().weight(1f)) {
-                AndroidView(factory = { web }, modifier = Modifier.fillMaxSize())
-                if (!showWebContent) {
+                if (nativeChoice != null) {
+                    AndroidView(
+                        factory = { PlayerView(it).apply {
+                            player = nativePlayer
+                            useController = true
+                            isFocusable = true
+                            isFocusableInTouchMode = true
+                            requestFocus()
+                        } },
+                        update = { it.player = nativePlayer },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    AndroidView(factory = { web }, modifier = Modifier.fillMaxSize())
+                }
+                if (!showWebContent && nativeChoice == null) {
                     Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             CircularProgressIndicator(color = accent)
