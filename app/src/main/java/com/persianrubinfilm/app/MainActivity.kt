@@ -12,6 +12,8 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.common.PlaybackException
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import org.json.JSONArray
@@ -1129,6 +1131,16 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     var nativeSources by remember(url) { mutableStateOf<List<NativeVideoSource>>(emptyList()) }
     var nativeChoice by remember(url) { mutableStateOf<NativeVideoSource?>(null) }
     val nativePlayer = remember(url) { ExoPlayer.Builder(context).build() }
+    DisposableEffect(nativePlayer) {
+        val listener = object : Player.Listener {
+            override fun onPlayerError(error: PlaybackException) {
+                nativeChoice = null
+                playerMessage = "Native stream unavailable; returning to provider controls"
+            }
+        }
+        nativePlayer.addListener(listener)
+        onDispose { nativePlayer.removeListener(listener) }
+    }
     DisposableEffect(nativePlayer) { onDispose { nativePlayer.release() } }
     LaunchedEffect(nativeChoice) {
         val choice = nativeChoice
@@ -1147,6 +1159,27 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     var showWebContent by remember(url) { mutableStateOf(false) }
     var manualContinuation by remember(url) { mutableStateOf(false) }
     var lastCompletedPage by remember(url) { mutableStateOf("") }
+    // Discover the exact HTTPS media request that the legitimately loaded provider
+    // player makes, including its original short-lived signature. Never infer or
+    // manufacture tokens from filenames.
+    fun registerObservedMedia(rawUrl: String) {
+        val uri = try { URI(rawUrl) } catch (_: Exception) { return }
+        val host = uri.host?.lowercase().orEmpty()
+        val path = uri.path.orEmpty()
+        if (uri.scheme != "https" ||
+            !(host == "farsiplex.buzz" || host.endsWith(".farsiplex.buzz")) ||
+            !Regex("\\.(mp4|m3u8|mpd)$", RegexOption.IGNORE_CASE).containsMatchIn(path)
+        ) return
+        val quality = Regex("(360|480|720|1080|1440|2160)(?=\\D|$)").find(path)?.value ?: "Auto"
+        val source = NativeVideoSource("Source ${nativeSources.size + 1}", rawUrl, quality)
+        if (nativeSources.none { it.url == rawUrl }) {
+            nativeSources = (nativeSources + source).takeLast(24)
+            if (nativeChoice == null && !accessPromptActive) {
+                nativeChoice = source
+                playerMessage = "Playing ${quality}p natively"
+            }
+        }
+    }
     val web = remember(url) {
         WebView(context).apply {
             settings.javaScriptEnabled = true
@@ -1184,6 +1217,15 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                 } else false
             }
             webViewClient = object : WebViewClient() {
+                override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
+                    val observed = request?.url?.toString().orEmpty()
+                    if (observed.isNotEmpty() && view != null) {
+                        view.post { registerObservedMedia(observed) }
+                    }
+                    // Observe only; let Chromium handle the original request and
+                    // provider access conditions without modifying the response.
+                    return null
+                }
                 override fun onPageStarted(view: WebView?, pageUrl: String?, favicon: Bitmap?) {
                     super.onPageStarted(view, pageUrl, favicon)
                     manualContinuation = false
@@ -1328,7 +1370,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                                 obj.optString("quality", "Auto")
                             )
                         }
-                        nativeSources = fresh.distinctBy { it.url }
+                        fresh.forEach { registerObservedMedia(it.url) }
                     } catch (_: Exception) { /* Keep site player if source inspection fails. */ }
                 }
                 web.evaluateJavascript(findOptionsScript()) { raw ->
