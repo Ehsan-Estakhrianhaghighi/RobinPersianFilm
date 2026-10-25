@@ -25,6 +25,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
@@ -40,6 +41,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -211,10 +213,37 @@ private class FarsiStore(context: android.content.Context) {
 }
 
 class MainActivity : ComponentActivity() {
+    var remoteMediaHandler: ((Int) -> Boolean)? = null
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+            val code = event.keyCode
+            if (code == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE ||
+                code == KeyEvent.KEYCODE_MEDIA_PLAY ||
+                code == KeyEvent.KEYCODE_MEDIA_PAUSE ||
+                code == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD ||
+                code == KeyEvent.KEYCODE_MEDIA_REWIND ||
+                code == KeyEvent.KEYCODE_MEDIA_NEXT ||
+                code == KeyEvent.KEYCODE_MEDIA_PREVIOUS) {
+                if (remoteMediaHandler?.invoke(code) == true) return true
+            }
+        }
+        return super.dispatchKeyEvent(event)
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent { MaterialTheme(colorScheme = darkColorScheme(primary = accent, background = background, surface = panel)) { RobinApp() } }
     }
+}
+
+@Composable
+private fun TvTextButton(onClick: () -> Unit, content: @Composable RowScope.() -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    TextButton(onClick = onClick,
+        modifier = Modifier.onFocusChanged { focused = it.isFocused }
+            .border(if (focused) 2.dp else 0.dp,
+                if (focused) accent else Color.Transparent, RoundedCornerShape(8.dp)),
+        content = content)
 }
 
 @Composable
@@ -1199,6 +1228,26 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     var checkingQualityVariants by remember(url) { mutableStateOf(false) }
     var playerMessage by remember(url) { mutableStateOf("Opening the final player…") }
     val nativePlayer = remember(url) { ExoPlayer.Builder(context).build() }
+    val activity = context as? MainActivity
+    DisposableEffect(activity, nativePlayer) {
+        if (activity != null) activity.remoteMediaHandler = { code ->
+            if (nativePlayer.currentMediaItem == null) false else {
+                when (code) {
+                    KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE ->
+                        if (nativePlayer.isPlaying) nativePlayer.pause() else nativePlayer.play()
+                    KeyEvent.KEYCODE_MEDIA_PLAY -> nativePlayer.play()
+                    KeyEvent.KEYCODE_MEDIA_PAUSE -> nativePlayer.pause()
+                    KeyEvent.KEYCODE_MEDIA_FAST_FORWARD, KeyEvent.KEYCODE_MEDIA_NEXT ->
+                        nativePlayer.seekTo((nativePlayer.currentPosition + 15_000L)
+                            .coerceAtMost(nativePlayer.duration.takeIf { it > 0 } ?: Long.MAX_VALUE))
+                    KeyEvent.KEYCODE_MEDIA_REWIND, KeyEvent.KEYCODE_MEDIA_PREVIOUS ->
+                        nativePlayer.seekTo((nativePlayer.currentPosition - 10_000L).coerceAtLeast(0L))
+                }
+                true
+            }
+        }
+        onDispose { if (activity != null) activity.remoteMediaHandler = null }
+    }
     DisposableEffect(nativePlayer) {
         val listener = object : Player.Listener {
             override fun onPlayerError(error: PlaybackException) {
@@ -1536,7 +1585,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     Box(modifier.background(Color.Black)) {
         Column(Modifier.fillMaxSize()) {
             if (!nativeFullscreen) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = onExit) { Text("← Back to details") }
+                TvTextButton(onClick = onExit) { Text("← Back to details") }
                 Spacer(Modifier.weight(1f))
                 Text("RobinPersianFilm Player", fontSize = 14.sp, color = Color.LightGray)
             }
@@ -1553,14 +1602,14 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                         sourceGroups.entries.forEachIndexed { index, entry ->
                             val candidate = entry.value.firstOrNull { it.quality == nativeChoice?.quality }
                                 ?: entry.value.first()
-                            TextButton(onClick = { nativeChoice = candidate }) {
+                            TvTextButton(onClick = { nativeChoice = candidate }) {
                                 val chosen = activeGroup == entry.key
                                 Text("${if (chosen) "✓ " else ""}Source ${index + 1}",
                                     color = if (chosen) Color.White else accent)
                             }
                         }
                         availablePlayers.forEach { number ->
-                            TextButton(onClick = { chooseProviderOption("player", number) }) {
+                            TvTextButton(onClick = { chooseProviderOption("player", number) }) {
                                 Text("Player $number", color = accent)
                             }
                         }
@@ -1569,13 +1618,13 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
                         displayedQualities.distinctBy { it.quality }.forEach { candidate ->
                             val qualityLabel = if (candidate.quality == "Auto") "Auto" else "${candidate.quality}p"
-                            TextButton(onClick = { nativeChoice = candidate }) {
+                            TvTextButton(onClick = { nativeChoice = candidate }) {
                                 Text("${if (nativeChoice?.quality == candidate.quality) "✓ " else ""}$qualityLabel",
                                     color = if (nativeChoice?.quality == candidate.quality) Color.White else accent)
                             }
                         }
                         availableQualities.filter { quality -> displayedQualities.none { it.quality == quality } }.forEach { quality ->
-                            TextButton(onClick = { chooseProviderOption("quality", quality) }) {
+                            TvTextButton(onClick = { chooseProviderOption("quality", quality) }) {
                                 Text("${quality}p · check", color = accent)
                             }
                         }
@@ -1589,7 +1638,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                     }
                     if (pendingSourceChange) Text(playerMessage, color = Color.LightGray, fontSize = 12.sp)
                     if (nativeChoice != null) {
-                        TextButton(onClick = { nativeFullscreen = true }) {
+                        TvTextButton(onClick = { nativeFullscreen = true }) {
                             Text("⛶ Full screen", color = Color.White)
                         }
                     }
@@ -1598,7 +1647,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
                         Text("Player:", color = Color.White, fontSize = 13.sp)
                         availablePlayers.forEach { number ->
-                            TextButton(onClick = {
+                            TvTextButton(onClick = {
                                 web.evaluateJavascript(selectOptionScript("player", number)) { result ->
                                     if (result.contains("selected")) { selectedPlayer = number; playerMessage = "Player $number selected" }
                                     else playerMessage = "Use the player's own source controls if they are inside an iframe"
@@ -1611,7 +1660,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
                         Text("Quality:", color = Color.White, fontSize = 13.sp)
                         availableQualities.forEach { number ->
-                            TextButton(onClick = {
+                            TvTextButton(onClick = {
                                 web.evaluateJavascript(selectOptionScript("quality", number)) { result ->
                                     if (result.contains("selected")) { selectedQuality = number; playerMessage = "$number quality selected" }
                                     else playerMessage = "This quality must be selected inside the video provider"
