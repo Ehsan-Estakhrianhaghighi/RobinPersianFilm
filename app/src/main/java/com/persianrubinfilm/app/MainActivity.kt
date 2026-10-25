@@ -1174,10 +1174,10 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
         val source = NativeVideoSource("Source ${nativeSources.size + 1}", rawUrl, quality)
         if (nativeSources.none { it.url == rawUrl }) {
             nativeSources = (nativeSources + source).takeLast(24)
-            if (wasRequested && nativeChoice == null && !accessPromptActive) {
-                nativeChoice = source
-                playerMessage = "Playing ${quality}p natively"
-            }
+        }
+        if (wasRequested && nativeChoice == null && !accessPromptActive) {
+            nativeChoice = nativeSources.firstOrNull { it.url == rawUrl } ?: source
+            playerMessage = "Playing ${quality}p natively"
         }
     }
     val web = remember(url) {
