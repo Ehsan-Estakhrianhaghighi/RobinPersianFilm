@@ -1093,21 +1093,23 @@ private suspend fun probeAuthorizedQualityVariants(source: NativeVideoSource): L
         val host = uri.host?.lowercase().orEmpty()
         if (uri.scheme != "https" || !(host == "farsiplex.buzz" || host.endsWith(".farsiplex.buzz")))
             return@withContext emptyList()
-        val match = Regex("""\.(360|480|720|1080|1440|2160)\.mp4$""", RegexOption.IGNORE_CASE)
+        // Some FarsiPlex titles use 01.480.mp4; others use antik-480.mp4.
+        // Preserve the original delimiter and signed query string.
+        val match = Regex("""[.-](360|480|720|1080|1440|2160)\.mp4$""", RegexOption.IGNORE_CASE)
             .find(uri.path.orEmpty()) ?: return@withContext emptyList()
         val original = match.groupValues[1]
+        val qualityRange = match.groups[1]?.range ?: return@withContext emptyList()
         // Only reasonable alternatives, not guesses at a provider's server list.
         val resolutions = listOf("480", "720", "1080").filter { it != original }
         resolutions.mapNotNull { quality ->
-            val candidatePath = uri.path.replaceRange(
-                match.range.first,
-                match.range.last + 1,
-                ".$quality.mp4"
-            )
+            val candidatePath = uri.path.replaceRange(qualityRange, quality)
             val checkUri = URI(uri.scheme, uri.rawAuthority, candidatePath, uri.rawQuery, null)
             val connection = try {
                 (URL(checkUri.toASCIIString()).openConnection() as HttpURLConnection).apply {
-                    requestMethod = "HEAD"
+                    // Some signed media servers do not implement HEAD consistently.
+                    // A one-byte GET is the same approach used by streaming players.
+                    requestMethod = "GET"
+                    setRequestProperty("Range", "bytes=0-0")
                     connectTimeout = 3500
                     readTimeout = 3500
                     instanceFollowRedirects = false
