@@ -1185,8 +1185,15 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.mediaPlaybackRequiresUserGesture = true
+            // Request the same desktop FarsiPlex layout seen in Chrome on a laptop.
+            // Apply before the first load; keep JavaScript, cookies and normal
+            // authorized source discovery untouched.
+            settings.userAgentString =
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
             settings.loadWithOverviewMode = true
             settings.useWideViewPort = true
+            settings.builtInZoomControls = true
+            settings.displayZoomControls = false
             settings.javaScriptCanOpenWindowsAutomatically = false
             settings.setSupportMultipleWindows(false)
             isFocusable = true
