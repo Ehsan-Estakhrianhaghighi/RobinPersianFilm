@@ -1130,7 +1130,6 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     var selectedQuality by remember(url) { mutableStateOf("") }
     var nativeSources by remember(url) { mutableStateOf<List<NativeVideoSource>>(emptyList()) }
     var nativeChoice by remember(url) { mutableStateOf<NativeVideoSource?>(null) }
-    var requestProviderQuality by remember(url) { mutableStateOf(false) }
     var playerMessage by remember(url) { mutableStateOf("Opening the final player…") }
     val nativePlayer = remember(url) { ExoPlayer.Builder(context).build() }
     DisposableEffect(nativePlayer) {
@@ -1447,7 +1446,6 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                             color = Color.LightGray, fontSize = 12.sp)
                         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
                             TextButton(onClick = {
-                                requestProviderQuality = true
                                 nativeChoice = null
                                 playerMessage = "Select another quality or Player 1/2/3 on the provider page, then start the video."
                             }) { Text("Change quality / player") }
