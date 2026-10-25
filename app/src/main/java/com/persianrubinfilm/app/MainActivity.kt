@@ -1257,13 +1257,15 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
             loadUrl(url)
         }
     }
-    // A changed website may require a genuine click on its preview. Do not
-    // automatically expose the preview after a few seconds; offer a fallback.
+    // Do not leave the user behind an endless loading mask when a provider
+    // requires a real tap or an access prompt inside a protected iframe.
+    // Navigation still proceeds automatically while the WebView is visible.
     LaunchedEffect(web) {
-        delay(7000)
-        if (!showWebContent) {
-            manualContinuation = true
-            playerMessage = "The website has not opened the final player yet"
+        delay(4500)
+        if (!showWebContent && nativeChoice == null) {
+            showWebContent = true
+            manualContinuation = false
+            playerMessage = "Continue in the provider player if required"
         }
     }
     // Check newly inserted offerwalls after page load, and keep moving through
@@ -1382,8 +1384,6 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                             TextButton(onClick = { nativeChoice = null }) { Text("Website player") }
                         }
                     }
-                } else {
-                    Text("Native video sources not available yet; using website player.", color = Color.LightGray, fontSize = 12.sp)
                 }
                 if (nativeChoice == null && availablePlayers.isNotEmpty()) {
                     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), verticalAlignment = Alignment.CenterVertically) {
@@ -1411,7 +1411,9 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                         }
                     }
                 }
-                if (nativeChoice == null) Text(playerMessage, fontSize = 12.sp, color = Color.LightGray, maxLines = 2, modifier = Modifier.padding(bottom = 5.dp))
+                if (nativeChoice == null && playerMessage != "Choose player or video quality") {
+                    Text(playerMessage, fontSize = 12.sp, color = Color.LightGray, maxLines = 2, modifier = Modifier.padding(bottom = 5.dp))
+                }
             }
             Box(Modifier.fillMaxSize().weight(1f)) {
                 if (nativeChoice != null) {
@@ -1435,14 +1437,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                             CircularProgressIndicator(color = accent)
                             Spacer(Modifier.height(12.dp))
                             Text("Opening the video player…", color = Color.White)
-                            if (manualContinuation) {
-                                Spacer(Modifier.height(10.dp))
-                                Text("The provider may require a manual step.", color = Color.LightGray)
-                                Spacer(Modifier.height(8.dp))
-                                OutlinedButton(onClick = { showWebContent = true }) {
-                                    Text("Show provider page to continue")
-                                }
-                            }
+                            Text("Checking the selected video's playback page", color = Color.LightGray, fontSize = 12.sp)
                         }
                     }
                 }
