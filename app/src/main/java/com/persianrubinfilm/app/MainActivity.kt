@@ -1080,7 +1080,7 @@ private const val discoverNativeVideoScript = """
   });
   if(modal)return '[]';
   var found=[],seen={};
-  var media=/\\.(mp4|m3u8|mpd)(?:[?#]|$)/i;
+  var media=/\.(mp4|m3u8|mpd)(?:[?#]|$)/i;
   function register(url,el){
     if(!url||!media.test(url))return;
     var p=el,steps=0;
@@ -1095,7 +1095,7 @@ private const val discoverNativeVideoScript = """
       seen[u.href]=1;
       var near=el.closest('[class*="source"],[class*="quality"],[class*="player"],li')||el.parentElement;
       var nearby=(near&&near.textContent||'').trim().slice(0,120);
-      var q=(nearby.match(/(?:360|480|720|1080|1440|2160)\\s*p?/i)||u.pathname.match(/(?:360|480|720|1080|1440|2160)(?=\\D|$)/)||[])[0]||'Auto';
+      var q=(nearby.match(/(?:360|480|720|1080|1440|2160)\s*p?/i)||u.pathname.match(/(?:360|480|720|1080|1440|2160)(?=\D|$)/)||[])[0]||'Auto';
       found.push({label:nearby.length<45&&nearby?nearby:'Video source '+(found.length+1),url:u.href,quality:q});
     }catch(e){}
   }
