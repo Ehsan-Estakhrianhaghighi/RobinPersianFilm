@@ -1448,7 +1448,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
                         groupedSources.forEachIndexed { index, candidate ->
                             TextButton(onClick = { nativeChoice = candidate }) {
-                                Text("${if (nativeChoice?.url == candidate.url) "✓ " else ""}Player ${index + 1}",
+                                Text("${if (nativeChoice?.url == candidate.url) "✓ " else ""}Source ${index + 1}",
                                     color = if (nativeChoice?.url == candidate.url) Color.White else accent)
                             }
                         }
