@@ -987,6 +987,8 @@ private const val isolateFinalPlayerScript = """
     var t=(el.textContent||'').toLowerCase();
     return visible(el)&&t.includes('unlock more content')&&t.includes('view a short ad');
   });
+  // Only the visible access prompt itself is protected. A stale Android flag
+  // must never stop cleanup after a completed or dismissed offerwall.
   if(dialog)return 'unlock-visible';
   var css=document.getElementById('robin-isolate-final-player');
   if(!css){
@@ -1003,6 +1005,8 @@ private const val isolateFinalPlayerScript = """
     return !!el.querySelector('video,[id*="jwplayer"],[class*="jwplayer"]');
   };
   var child=group, hidden=0;
+  // Hide the actual website sections preceding the tabs, not just their ad
+  // iframe. This also catches unlabelled stacked sponsor/anchor containers.
   while(child&&child.parentElement&&child.parentElement!==document.documentElement){
     var parent=child.parentElement;
     for(var sib=parent.firstElementChild;sib&&sib!==child;sib=sib.nextElementSibling){
@@ -1018,6 +1022,7 @@ private const val isolateFinalPlayerScript = """
   document.body.style.setProperty('overflow-y','auto','important');
   var top=group.getBoundingClientRect().top+(window.scrollY||document.documentElement.scrollTop||0);
   window.scrollTo(0,Math.max(0,top-8));
+  if(group.scrollIntoView)group.scrollIntoView({block:'start',behavior:'instant'});
   return 'player-first:'+hidden;
 })();
 """
@@ -1241,7 +1246,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
             if (atFinal && showWebContent) {
                 web.evaluateJavascript(restorePlayerScrollScript, null)
                 web.evaluateJavascript(reduceFinalAdSpaceScript, null)
-                if (!accessPromptActive) web.evaluateJavascript(isolateFinalPlayerScript, null)
+                web.evaluateJavascript(isolateFinalPlayerScript, null)
                 web.evaluateJavascript(findOptionsScript()) { raw ->
                     val decoded = raw.removeSurrounding("\"").replace("\\n", "")
                     val parts = decoded.split('|')
@@ -1257,7 +1262,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                             playerMessage = "Choose a source or quality below"
                         }
                         web.evaluateJavascript(focusAvailablePlayerScript(), null)
-                        if (!accessPromptActive) web.evaluateJavascript(isolateFinalPlayerScript, null)
+                        web.evaluateJavascript(isolateFinalPlayerScript, null)
                     }
                 }
             }
