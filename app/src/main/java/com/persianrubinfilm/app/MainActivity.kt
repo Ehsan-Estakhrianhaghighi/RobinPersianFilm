@@ -1546,7 +1546,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                     val groupedSources = nativeSources.distinctBy { it.url }
                     val sourceGroups = groupedSources.groupBy(::nativeSourceGroupKey)
                     val activeGroup = nativeChoice?.let(::nativeSourceGroupKey)
-                    val displayedQualities = sourceGroups[activeGroup]
+                    val displayedQualities = activeGroup?.let { sourceGroups[it] }
                         ?: sourceGroups.values.firstOrNull().orEmpty()
                     Text("Available sources", color = Color.LightGray, fontSize = 12.sp)
                     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
