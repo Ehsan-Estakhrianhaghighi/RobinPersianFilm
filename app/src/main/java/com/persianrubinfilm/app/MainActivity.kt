@@ -964,6 +964,64 @@ private const val scrollToVideoSourcesScript = """
 })();
 """
 
+/** On the *final* FarsiPlex page, display the actual player section instead of
+ * the site's preceding header/ad blocks. We don't navigate around the site's
+ * access checks: while its offerwall is visible, leave the document alone.
+ * This uses the three real player tabs as an anchor rather than guessing ad
+ * class names. Re-run after dynamic insertions, without removing media nodes. */
+private const val isolateFinalPlayerScript = """
+(function(){
+  if(!/\\/play-hq-player\\/?$/.test(location.pathname))return 'other-page';
+  var visible=function(el){if(!el)return false;var r=el.getBoundingClientRect();return r.width>15&&r.height>10;};
+  var labels=[...document.querySelectorAll('button,a,[role="tab"],[role="button"],li,span,div')];
+  var tab=labels.find(function(el){return visible(el)&&/^player\\s*1$/i.test((el.textContent||'').trim());});
+  if(!tab)return 'tabs-loading';
+  var tabs=['player 1','player 2','player 3'];
+  var group=tab;
+  for(var i=0;i<5&&group&&group.parentElement;i++,group=group.parentElement){
+    var t=(group.textContent||'').toLowerCase();
+    if(tabs.every(function(x){return t.includes(x);})){break;}
+  }
+  if(!group)return 'tabs-loading';
+  var dialog=[...document.querySelectorAll('[role="dialog"],[aria-modal="true"],.modal,[class*="unlock"],[id*="unlock"]')].find(function(el){
+    var t=(el.textContent||'').toLowerCase();
+    return visible(el)&&t.includes('unlock more content')&&t.includes('view a short ad');
+  });
+  if(dialog)return 'unlock-visible';
+  var css=document.getElementById('robin-isolate-final-player');
+  if(!css){
+    css=document.createElement('style');css.id='robin-isolate-final-player';
+    css.textContent='[data-robin-prior="1"]{display:none!important;height:0!important;min-height:0!important;margin:0!important;padding:0!important;overflow:hidden!important;}';
+    (document.head||document.documentElement).appendChild(css);
+  }
+  var protectedNode=function(el){
+    if(!el||el.nodeType!==1)return true;
+    if(el.matches('script,style,link,noscript'))return true;
+    var t=(el.textContent||'').toLowerCase().slice(0,2500);
+    if(t.includes('unlock more content')&&t.includes('view a short ad'))return true;
+    if(el.querySelector('[role="dialog"],[aria-modal="true"]'))return true;
+    return !!el.querySelector('video,[id*="jwplayer"],[class*="jwplayer"]');
+  };
+  var child=group, hidden=0;
+  while(child&&child.parentElement&&child.parentElement!==document.documentElement){
+    var parent=child.parentElement;
+    for(var sib=parent.firstElementChild;sib&&sib!==child;sib=sib.nextElementSibling){
+      if(protectedNode(sib))continue;
+      if(sib.getAttribute('data-robin-prior')!=='1'){
+        sib.setAttribute('data-robin-prior','1');hidden++;
+      }
+    }
+    if(parent===document.body)break;
+    child=parent;
+  }
+  document.documentElement.style.setProperty('scroll-behavior','auto','important');
+  document.body.style.setProperty('overflow-y','auto','important');
+  var top=group.getBoundingClientRect().top+(window.scrollY||document.documentElement.scrollTop||0);
+  window.scrollTo(0,Math.max(0,top-8));
+  return 'player-first:'+hidden;
+})();
+"""
+
 /** The WebView remains inside the app. We do NOT bypass FarsiPlex's 24-hour
  * ad unlock, copy signed streams, or circumvent access controls. The native controls
  * below only click player/quality controls actually present in the page's DOM.
@@ -1086,7 +1144,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                         view.evaluateJavascript(playerAdCleaner, null)
                         view.evaluateJavascript(reduceFinalAdSpaceScript, null)
                         view.evaluateJavascript(restorePlayerScrollScript, null)
-                        view.evaluateJavascript(scrollToVideoSourcesScript, null)
+                        view.evaluateJavascript(isolateFinalPlayerScript, null)
                     }
                     // Probe for the required access dialog promptly on EVERY page.
                     view.evaluateJavascript(startRequiredAccessAdScript) { raw ->
@@ -1183,6 +1241,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
             if (atFinal && showWebContent) {
                 web.evaluateJavascript(restorePlayerScrollScript, null)
                 web.evaluateJavascript(reduceFinalAdSpaceScript, null)
+                if (!accessPromptActive) web.evaluateJavascript(isolateFinalPlayerScript, null)
                 web.evaluateJavascript(findOptionsScript()) { raw ->
                     val decoded = raw.removeSurrounding("\"").replace("\\n", "")
                     val parts = decoded.split('|')
@@ -1198,7 +1257,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                             playerMessage = "Choose a source or quality below"
                         }
                         web.evaluateJavascript(focusAvailablePlayerScript(), null)
-                        web.evaluateJavascript(scrollToVideoSourcesScript, null)
+                        if (!accessPromptActive) web.evaluateJavascript(isolateFinalPlayerScript, null)
                     }
                 }
             }
