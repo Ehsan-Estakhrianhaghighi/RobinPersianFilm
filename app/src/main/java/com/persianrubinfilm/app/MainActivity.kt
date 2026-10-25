@@ -1162,7 +1162,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     // Discover the exact HTTPS media request that the legitimately loaded provider
     // player makes, including its original short-lived signature. Never infer or
     // manufacture tokens from filenames.
-    fun registerObservedMedia(rawUrl: String) {
+    fun registerObservedMedia(rawUrl: String, wasRequested: Boolean = true) {
         val uri = try { URI(rawUrl) } catch (_: Exception) { return }
         val host = uri.host?.lowercase().orEmpty()
         val path = uri.path.orEmpty()
@@ -1174,7 +1174,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
         val source = NativeVideoSource("Source ${nativeSources.size + 1}", rawUrl, quality)
         if (nativeSources.none { it.url == rawUrl }) {
             nativeSources = (nativeSources + source).takeLast(24)
-            if (nativeChoice == null && !accessPromptActive) {
+            if (wasRequested && nativeChoice == null && !accessPromptActive) {
                 nativeChoice = source
                 playerMessage = "Playing ${quality}p natively"
             }
@@ -1370,7 +1370,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                                 obj.optString("quality", "Auto")
                             )
                         }
-                        fresh.forEach { registerObservedMedia(it.url) }
+                        fresh.forEach { registerObservedMedia(it.url, wasRequested = false) }
                     } catch (_: Exception) { /* Keep site player if source inspection fails. */ }
                 }
                 web.evaluateJavascript(findOptionsScript()) { raw ->
