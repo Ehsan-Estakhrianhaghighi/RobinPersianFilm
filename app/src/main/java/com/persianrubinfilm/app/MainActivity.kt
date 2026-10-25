@@ -221,6 +221,7 @@ class MainActivity : ComponentActivity() {
             if (code == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE ||
                 code == KeyEvent.KEYCODE_MEDIA_PLAY ||
                 code == KeyEvent.KEYCODE_MEDIA_PAUSE ||
+                code == KeyEvent.KEYCODE_MEDIA_STOP ||
                 code == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD ||
                 code == KeyEvent.KEYCODE_MEDIA_REWIND ||
                 code == KeyEvent.KEYCODE_MEDIA_NEXT ||
@@ -240,7 +241,7 @@ class MainActivity : ComponentActivity() {
 private fun TvTextButton(onClick: () -> Unit, content: @Composable RowScope.() -> Unit) {
     var focused by remember { mutableStateOf(false) }
     TextButton(onClick = onClick,
-        modifier = Modifier.onFocusChanged { focused = it.isFocused }
+        modifier = Modifier.onFocusChanged { focused = it.hasFocus }
             .border(if (focused) 2.dp else 0.dp,
                 if (focused) accent else Color.Transparent, RoundedCornerShape(8.dp)),
         content = content)
@@ -388,7 +389,7 @@ private fun RobinApp() {
                     items(listed, key = { it.page }) { item ->
                         var cardFocused by remember { mutableStateOf(false) }
                         Column(Modifier
-                            .onFocusChanged { cardFocused = it.isFocused }
+                            .onFocusChanged { cardFocused = it.hasFocus }
                             .border(if (cardFocused) 3.dp else 1.dp,
                                 if (cardFocused) accent else panel, RoundedCornerShape(10.dp))
                             .background(panel, RoundedCornerShape(10.dp))
@@ -1243,7 +1244,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                     KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE ->
                         if (nativePlayer.isPlaying) nativePlayer.pause() else nativePlayer.play()
                     KeyEvent.KEYCODE_MEDIA_PLAY -> nativePlayer.play()
-                    KeyEvent.KEYCODE_MEDIA_PAUSE -> nativePlayer.pause()
+                    KeyEvent.KEYCODE_MEDIA_PAUSE, KeyEvent.KEYCODE_MEDIA_STOP -> nativePlayer.pause()
                     KeyEvent.KEYCODE_MEDIA_FAST_FORWARD, KeyEvent.KEYCODE_MEDIA_NEXT ->
                         nativePlayer.seekTo((nativePlayer.currentPosition + 15_000L)
                             .coerceAtMost(nativePlayer.duration.takeIf { it > 0 } ?: Long.MAX_VALUE))
