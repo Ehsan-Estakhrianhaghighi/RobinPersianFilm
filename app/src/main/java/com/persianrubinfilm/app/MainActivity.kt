@@ -388,7 +388,7 @@ private fun RobinApp() {
                         Column(Modifier
                             .onFocusChanged { cardFocused = it.hasFocus }
                             .border(if (cardFocused) 3.dp else 1.dp,
-                                if (cardFocused) accent else panel, RoundedCornerShape(10.dp))
+                                if (cardFocused) Color(0xFFFFD600) else panel, RoundedCornerShape(10.dp))
                             .background(panel, RoundedCornerShape(10.dp))
                             .clickable { selected = item; chosenEpisode = null; episodeList = emptyList() }
                             .padding(8.dp)) {
