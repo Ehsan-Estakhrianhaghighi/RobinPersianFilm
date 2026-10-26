@@ -240,7 +240,7 @@ private fun TvTextButton(
     TextButton(onClick = onClick,
         modifier = modifier.onFocusChanged { focused = it.hasFocus }
             .border(if (focused) 2.dp else 0.dp,
-                if (focused) accent else Color.Transparent, RoundedCornerShape(8.dp)),
+                if (focused) Color(0xFFFFD600) else Color.Transparent, RoundedCornerShape(8.dp)),
         content = content)
 }
 
@@ -1229,10 +1229,9 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     var nativeSources by remember(url) { mutableStateOf<List<NativeVideoSource>>(emptyList()) }
     var nativeChoice by remember(url) { mutableStateOf<NativeVideoSource?>(null) }
     var nativeFullscreen by remember(url) { mutableStateOf(false) }
-    var exitFullscreenFocused by remember(url) { mutableStateOf(false) }
-    val exitFullscreenRequester = remember { FocusRequester() }
+    var fullscreenSettings by remember(url) { mutableStateOf(false) }
+    val fullscreenPlayRequester = remember { FocusRequester() }
     val fullscreenForKeys by rememberUpdatedState(nativeFullscreen)
-    val exitFocusedForKeys by rememberUpdatedState(exitFullscreenFocused)
     var pendingSourceChange by remember(url) { mutableStateOf(false) }
     var checkingQualityVariants by remember(url) { mutableStateOf(false) }
     var playerMessage by remember(url) { mutableStateOf("Opening the final player…") }
@@ -1269,12 +1268,6 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                         if (!fullscreenForKeys) false else {
                             nativePlayer.seekTo((nativePlayer.currentPosition + 10_000L)
                                 .coerceAtMost(nativePlayer.duration.takeIf { it > 0 } ?: Long.MAX_VALUE))
-                            true
-                        }
-                    }
-                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
-                        if (!fullscreenForKeys || exitFocusedForKeys) false else {
-                            if (nativePlayer.isPlaying) nativePlayer.pause() else nativePlayer.play()
                             true
                         }
                     }
@@ -1615,8 +1608,13 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     DisposableEffect(web) { onDispose { web.stopLoading(); web.onPause(); web.destroy() } }
     BackHandler(nativeFullscreen) { nativeFullscreen = false }
     LaunchedEffect(nativeFullscreen) {
-        if (nativeFullscreen) exitFullscreenRequester.requestFocus()
-        else exitFullscreenFocused = false
+        if (nativeFullscreen) {
+            fullscreenSettings = false
+            delay(100)
+            fullscreenPlayRequester.requestFocus()
+        } else {
+            fullscreenSettings = false
+        }
     }
     BackHandler(customView != null) {
         customCallback?.onCustomViewHidden(); customView = null; customCallback = null
@@ -1757,12 +1755,42 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                     AndroidView(factory = { web }, modifier = Modifier.fillMaxSize())
                 }
                 if (nativeFullscreen && nativeChoice != null) {
-                    TvTextButton(
-                        onClick = { nativeFullscreen = false },
+                    Column(
                         modifier = Modifier.align(Alignment.TopEnd)
-                            .focusRequester(exitFullscreenRequester)
-                            .onFocusChanged { exitFullscreenFocused = it.hasFocus }
-                    ) { Text("Exit full screen", color = Color.White) }
+                            .background(Color(0xDD101015), RoundedCornerShape(10.dp))
+                            .padding(6.dp),
+                        horizontalAlignment = Alignment.End
+                    ) {
+                        TvTextButton(onClick = { nativeFullscreen = false }) {
+                            Text("Exit full screen", color = Color.White)
+                        }
+                        TvTextButton(onClick = { fullscreenSettings = !fullscreenSettings }) {
+                            Text(if (fullscreenSettings) "Hide settings" else "Video settings", color = Color.White)
+                        }
+                        TvTextButton(
+                            onClick = {
+                                if (nativePlayer.isPlaying) nativePlayer.pause() else nativePlayer.play()
+                            },
+                            modifier = Modifier.focusRequester(fullscreenPlayRequester)
+                        ) { Text("Play / Pause", color = Color.White) }
+                        if (fullscreenSettings) {
+                            Text("Quality", color = Color.White, fontSize = 12.sp)
+                            val qualities = nativeSources
+                                .filter { nativeSourceGroupKey(it) == nativeChoice?.let(::nativeSourceGroupKey) }
+                                .distinctBy { it.quality }
+                            qualities.forEach { source ->
+                                TvTextButton(onClick = { nativeChoice = source }) {
+                                    Text("${if (nativeChoice?.url == source.url) "✓ " else ""}${source.quality}p", color = Color.White)
+                                }
+                            }
+                            Text("Speed", color = Color.White, fontSize = 12.sp)
+                            listOf(0.75f, 1f, 1.25f, 1.5f).forEach { speed ->
+                                TvTextButton(onClick = { nativePlayer.setPlaybackSpeed(speed) }) {
+                                    Text("${speed}×", color = Color.White)
+                                }
+                            }
+                        }
+                    }
                 }
                 if (!showWebContent && nativeChoice == null) {
                     Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
