@@ -31,6 +31,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -239,8 +240,9 @@ private fun TvTextButton(
     var focused by remember { mutableStateOf(false) }
     TextButton(onClick = onClick,
         modifier = modifier.onFocusChanged { focused = it.hasFocus }
-            .border(if (focused) 2.dp else 0.dp,
-                if (focused) Color(0xFFFFD600) else Color.Transparent, RoundedCornerShape(8.dp)),
+            .border(if (focused) 3.dp else 0.dp,
+                if (focused) Color(0xFFFFD600) else Color.Transparent, RoundedCornerShape(8.dp))
+            .background(if (focused) Color(0xFF5C4B00) else Color.Transparent, RoundedCornerShape(8.dp)),
         content = content)
 }
 
@@ -253,8 +255,9 @@ private fun TvButton(
 ) {
     var focused by remember { mutableStateOf(false) }
     val modifier = Modifier.onFocusChanged { focused = it.hasFocus }
-        .border(if (focused) 2.dp else 0.dp,
+        .border(if (focused) 3.dp else 0.dp,
             if (focused) Color(0xFFFFD600) else Color.Transparent, RoundedCornerShape(8.dp))
+        .background(if (focused) Color(0xFF5C4B00) else Color.Transparent, RoundedCornerShape(8.dp))
     if (outlined) OutlinedButton(onClick = onClick, enabled = enabled, modifier = modifier, content = content)
     else Button(onClick = onClick, enabled = enabled, modifier = modifier, content = content)
 }
@@ -1807,7 +1810,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                             }
                             requestFocus()
                         } },
-                        update = { it.player = nativePlayer },
+                        update = { if (it.player !== nativePlayer) it.player = nativePlayer; it.useController = !nativeFullscreen },
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
@@ -1818,7 +1821,10 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                 if (nativeFullscreen && nativeChoice != null && fullscreenControlsVisible) {
                     Column(
                         modifier = Modifier.align(Alignment.CenterEnd)
-                            .background(Color(0xE8101015), RoundedCornerShape(12.dp))
+                            .fillMaxHeight(0.92f)
+                            .widthIn(min = 230.dp, max = 400.dp)
+                            .background(Color(0xF5101015), RoundedCornerShape(12.dp))
+                            .verticalScroll(rememberScrollState())
                             .padding(12.dp),
                         horizontalAlignment = Alignment.Start
                     ) {
@@ -1857,6 +1863,10 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                             modifier = Modifier.focusRequester(fullscreenMenuRequester)
                         ) { Text("Close controls", color = Color.White) }
                         TvTextButton(onClick = {
+                            fullscreenControlsVisible = false
+                            nativeFullscreen = false
+                        }) { Text("Exit full screen", color = Color.White) }
+                        TvTextButton(onClick = {
                             if (nativePlayer.isPlaying) nativePlayer.pause() else nativePlayer.play()
                         }) { Text("Play / Pause", color = Color.White) }
                         Text("Quality", color = Color.White, fontSize = 13.sp)
@@ -1878,10 +1888,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                                 fullscreenControlsVisible = false
                             }) { Text("Source ${index + 1}", color = Color.White) }
                         }
-                        TvTextButton(onClick = {
-                            fullscreenControlsVisible = false
-                            nativeFullscreen = false
-                        }) { Text("Exit full screen", color = Color.White) }
+
                     }
                 }
                 if (!showWebContent && nativeChoice == null) {
