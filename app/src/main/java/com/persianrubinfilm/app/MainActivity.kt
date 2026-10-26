@@ -245,6 +245,21 @@ private fun TvTextButton(
 }
 
 @Composable
+private fun TvButton(
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    outlined: Boolean = false,
+    content: @Composable RowScope.() -> Unit
+) {
+    var focused by remember { mutableStateOf(false) }
+    val modifier = Modifier.onFocusChanged { focused = it.hasFocus }
+        .border(if (focused) 2.dp else 0.dp,
+            if (focused) Color(0xFFFFD600) else Color.Transparent, RoundedCornerShape(8.dp))
+    if (outlined) OutlinedButton(onClick = onClick, enabled = enabled, modifier = modifier, content = content)
+    else Button(onClick = onClick, enabled = enabled, modifier = modifier, content = content)
+}
+
+@Composable
 private fun RobinApp() {
     val context = LocalContext.current
     val store = remember { FarsiStore(context) }
@@ -295,8 +310,13 @@ private fun RobinApp() {
             Text("RobinPersianFilm", color = accent, fontWeight = FontWeight.Bold, fontSize = 23.sp)
             Spacer(Modifier.weight(1f))
             if (playerUrl == null && selected == null) {
+                var searchFocused by remember { mutableStateOf(false) }
                 BasicTextField(value = search, onValueChange = { search = it }, singleLine = true,
-                    modifier = Modifier.widthIn(min = 110.dp, max = 230.dp).background(panel, RoundedCornerShape(8.dp)).padding(10.dp).focusable(),
+                    modifier = Modifier.widthIn(min = 110.dp, max = 230.dp)
+                        .onFocusChanged { searchFocused = it.hasFocus }
+                        .border(if (searchFocused) 2.dp else 0.dp,
+                            if (searchFocused) Color(0xFFFFD600) else Color.Transparent, RoundedCornerShape(8.dp))
+                        .background(panel, RoundedCornerShape(8.dp)).padding(10.dp),
                     textStyle = androidx.compose.ui.text.TextStyle(color = Color.White, fontSize = 15.sp),
                     decorationBox = { inner -> Box { if (search.isEmpty()) Text("⌕ Search", color = Color.LightGray); inner() } })
             }
@@ -308,7 +328,7 @@ private fun RobinApp() {
             selected != null -> {
                 val item = selected!!
                 LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    item { TextButton(onClick = { closeDetails() }) { Text("← Back") } }
+                    item { TvTextButton(onClick = { closeDetails() }) { Text("← Back") } }
                     item { Text(item.title, color = Color.White, fontSize = 27.sp, fontWeight = FontWeight.Bold) }
                     item {
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -317,36 +337,40 @@ private fun RobinApp() {
                             Column(Modifier.padding(start = 16.dp)) {
                                 Text(if (item.series) "TV Series" else "Movie", color = Color.LightGray)
                                 Text("Choose a player and video quality inside RobinPersianFilm. Some sources require an unlock step before playing.", color = Color.LightGray)
-                                TextButton(onClick = { store.favorite(item.page); favorites = store.favorites() }) { Text(if (item.page in favorites) "♥ Saved" else "♡ My List") }
+                                TvTextButton(onClick = { store.favorite(item.page); favorites = store.favorites() }) { Text(if (item.page in favorites) "♥ Saved" else "♡ My List") }
                             }
                         }
                     }
                     if (item.series) {
                         if (episodeList.isEmpty()) {
                             item { Text("Episodes may still be loading, or this series has no episode links available.", color = Color.LightGray) }
-                            item { Button(onClick = { playerUrl = item.page }) { Text("Open series page") } }
+                            item { TvButton(onClick = { playerUrl = item.page }) { Text("Open series page") } }
                         } else {
                             item { Text("Choose season", fontSize = 20.sp, fontWeight = FontWeight.Bold) }
                             item {
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     episodeList.map { it.season }.distinct().forEach { season ->
-                                        if (season == chosenSeason) Button(onClick = { chosenSeason = season }) { Text("Season $season") }
-                                        else OutlinedButton(onClick = { chosenSeason = season }) { Text("Season $season") }
+                                        if (season == chosenSeason) TvButton(onClick = { chosenSeason = season }) { Text("Season $season") }
+                                        else TvButton(outlined = true, onClick = { chosenSeason = season }) { Text("Season $season") }
                                     }
                                 }
                             }
                             items(episodeList.filter { it.season == chosenSeason }, key = { it.page }) { episode ->
-                                Row(Modifier.fillMaxWidth().background(if (chosenEpisode?.page == episode.page) panel else background, RoundedCornerShape(8.dp))
-                                    .clickable { chosenEpisode = episode }.focusable().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                var episodeFocused by remember { mutableStateOf(false) }
+                                Row(Modifier.fillMaxWidth().onFocusChanged { episodeFocused = it.hasFocus }
+                                    .border(if (episodeFocused) 2.dp else 0.dp,
+                                        if (episodeFocused) Color(0xFFFFD600) else Color.Transparent, RoundedCornerShape(8.dp))
+                                    .background(if (chosenEpisode?.page == episode.page) panel else background, RoundedCornerShape(8.dp))
+                                    .clickable { chosenEpisode = episode }.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                                     Text("S${episode.season} · ${episode.name}", color = Color.White)
                                     Spacer(Modifier.weight(1f))
                                     if (chosenEpisode?.page == episode.page) Text("✓", color = accent)
                                 }
                             }
-                            item { Button(onClick = { chosenEpisode?.let { store.mark(it.page); watched = store.watched(); openPlayback(it.page) } }, enabled = chosenEpisode != null && !resolvingPlayer) { Text(if (resolvingPlayer) "Opening player…" else "▶ Play selected episode") } }
+                            item { TvButton(onClick = { chosenEpisode?.let { store.mark(it.page); watched = store.watched(); openPlayback(it.page) } }, enabled = chosenEpisode != null && !resolvingPlayer) { Text(if (resolvingPlayer) "Opening player…" else "▶ Play selected episode") } }
                         }
                     } else {
-                        item { Button(onClick = { store.mark(item.page); watched = store.watched(); openPlayback(item.page) }, enabled = !resolvingPlayer) { Text(if (resolvingPlayer) "Opening player…" else "▶ Play movie") } }
+                        item { TvButton(onClick = { store.mark(item.page); watched = store.watched(); openPlayback(item.page) }, enabled = !resolvingPlayer) { Text(if (resolvingPlayer) "Opening player…" else "▶ Play movie") } }
                     }
                     item { Text("Playback stays inside RobinPersianFilm. Complete a provider-required unlock if shown. Player and quality options appear as they become available.", color = Color.LightGray, fontSize = 13.sp) }
                     item { Spacer(Modifier.height(24.dp)) }
@@ -355,7 +379,7 @@ private fun RobinApp() {
             else -> {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     Tab.entries.forEach { t ->
-                        TextButton(onClick = { tab = t }, modifier = Modifier.weight(1f)) {
+                        TvTextButton(onClick = { tab = t }, modifier = Modifier.weight(1f)) {
                             Text(t.name, color = if (tab == t) accent else Color.LightGray, fontSize = 12.sp, maxLines = 1)
                         }
                     }
@@ -372,7 +396,7 @@ private fun RobinApp() {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text("${tab.name} (${listed.size})", fontSize = 19.sp, fontWeight = FontWeight.Bold, color = Color.White)
                     Spacer(Modifier.weight(1f))
-                    TextButton(onClick = {
+                    TvTextButton(onClick = {
                         scope.launch {
                             loading = true
                             movies = try { readCatalog(false) } catch (_: Exception) { movies }
