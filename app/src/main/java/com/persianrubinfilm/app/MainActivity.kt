@@ -1230,14 +1230,35 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     var nativeChoice by remember(url) { mutableStateOf<NativeVideoSource?>(null) }
     var nativeFullscreen by remember(url) { mutableStateOf(false) }
     var fullscreenControlsVisible by remember(url) { mutableStateOf(false) }
+    var seekBarFocused by remember(url) { mutableStateOf(false) }
+    var seekPosition by remember(url) { mutableLongStateOf(0L) }
+    var currentPlaybackPosition by remember(url) { mutableLongStateOf(0L) }
+    var playbackDuration by remember(url) { mutableLongStateOf(0L) }
     val fullscreenMenuRequester = remember { FocusRequester() }
+    val seekBarRequester = remember { FocusRequester() }
     val fullscreenForKeys by rememberUpdatedState(nativeFullscreen)
     val controlsForKeys by rememberUpdatedState(fullscreenControlsVisible)
+    val seekFocusedForKeys by rememberUpdatedState(seekBarFocused)
     var pendingSourceChange by remember(url) { mutableStateOf(false) }
     var checkingQualityVariants by remember(url) { mutableStateOf(false) }
     var playerMessage by remember(url) { mutableStateOf("Opening the final player…") }
     val nativePlayer = remember(url) { ExoPlayer.Builder(context).build() }
     val activity = context as? MainActivity
+    LaunchedEffect(nativePlayer, fullscreenControlsVisible) {
+        while (fullscreenControlsVisible) {
+            currentPlaybackPosition = nativePlayer.currentPosition.coerceAtLeast(0L)
+            playbackDuration = nativePlayer.duration.coerceAtLeast(0L)
+            delay(350L)
+        }
+    }
+    fun showControls(focusProgress: Boolean, pauseVideo: Boolean) {
+        if (pauseVideo) nativePlayer.pause()
+        seekPosition = nativePlayer.currentPosition.coerceAtLeast(0L)
+        currentPlaybackPosition = seekPosition
+        playbackDuration = nativePlayer.duration.coerceAtLeast(0L)
+        fullscreenControlsVisible = true
+        seekBarFocused = focusProgress
+    }
     DisposableEffect(activity, nativePlayer) {
         if (activity != null) activity.remoteMediaHandler = { code ->
             if (nativePlayer.currentMediaItem == null) false else {
@@ -1259,23 +1280,28 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                         nativePlayer.seekTo((nativePlayer.currentPosition - 10_000L).coerceAtLeast(0L))
                         true
                     }
-                    KeyEvent.KEYCODE_DPAD_LEFT -> {
-                        if (!fullscreenForKeys || controlsForKeys) false else {
-                            nativePlayer.seekTo((nativePlayer.currentPosition - 10_000L).coerceAtLeast(0L))
+                    KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        if (!fullscreenForKeys) false
+                        else if (!controlsForKeys) {
+                            // First press reveals the seek bar; no jump yet.
+                            showControls(focusProgress = true, pauseVideo = false)
                             true
-                        }
-                    }
-                    KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                        if (!fullscreenForKeys || controlsForKeys) false else {
-                            nativePlayer.seekTo((nativePlayer.currentPosition + 10_000L)
-                                .coerceAtMost(nativePlayer.duration.takeIf { it > 0 } ?: Long.MAX_VALUE))
+                        } else if (seekFocusedForKeys) {
+                            val delta = if (code == KeyEvent.KEYCODE_DPAD_RIGHT) 10_000L else -10_000L
+                            val duration = nativePlayer.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
+                            seekPosition = (seekPosition + delta).coerceIn(0L, duration)
                             true
-                        }
+                        } else false
                     }
                     KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
                     KeyEvent.KEYCODE_NUMPAD_ENTER -> {
-                        if (fullscreenForKeys && !controlsForKeys) {
-                            fullscreenControlsVisible = true
+                        if (!fullscreenForKeys) false
+                        else if (!controlsForKeys) {
+                            showControls(focusProgress = false, pauseVideo = true)
+                            true
+                        } else if (seekFocusedForKeys) {
+                            nativePlayer.seekTo(seekPosition)
+                            seekBarFocused = false
                             true
                         } else false
                     }
@@ -1615,16 +1641,18 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     }
     DisposableEffect(web) { onDispose { web.stopLoading(); web.onPause(); web.destroy() } }
     BackHandler(nativeFullscreen) {
-        if (fullscreenControlsVisible) fullscreenControlsVisible = false
-        else nativeFullscreen = false
+        fullscreenControlsVisible = false
+        nativeFullscreen = false
     }
     LaunchedEffect(nativeFullscreen) {
         fullscreenControlsVisible = false
+        seekBarFocused = false
     }
-    LaunchedEffect(fullscreenControlsVisible) {
+    LaunchedEffect(fullscreenControlsVisible, seekBarFocused) {
         if (nativeFullscreen && fullscreenControlsVisible) {
-            delay(80)
-            fullscreenMenuRequester.requestFocus()
+            delay(100)
+            if (seekBarFocused) seekBarRequester.requestFocus()
+            else fullscreenMenuRequester.requestFocus()
         }
     }
     BackHandler(customView != null) {
@@ -1738,26 +1766,18 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                             isFocusable = true
                             isFocusableInTouchMode = true
                             setOnKeyListener { _, code, event ->
-                                if (event.action != KeyEvent.ACTION_DOWN ||
-                                    event.repeatCount != 0) false
-                                else when (code) {
-                                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
-                                        if (nativeFullscreen && !fullscreenControlsVisible) {
-                                            fullscreenControlsVisible = true
-                                            true
-                                        } else false
-                                    }
-                                    KeyEvent.KEYCODE_DPAD_LEFT -> {
-                                        nativePlayer.seekTo((nativePlayer.currentPosition - 10_000L).coerceAtLeast(0L))
-                                        true
-                                    }
-                                    KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                                        nativePlayer.seekTo((nativePlayer.currentPosition + 10_000L)
-                                            .coerceAtMost(nativePlayer.duration.takeIf { it > 0 } ?: Long.MAX_VALUE))
-                                        true
-                                    }
-                                    else -> false
-                                }
+                                if (event.action != KeyEvent.ACTION_DOWN || event.repeatCount != 0) false
+                                else if (nativeFullscreen &&
+                                    (code == KeyEvent.KEYCODE_DPAD_CENTER ||
+                                     code == KeyEvent.KEYCODE_ENTER)) {
+                                    showControls(focusProgress = false, pauseVideo = true)
+                                    true
+                                } else if (nativeFullscreen &&
+                                    (code == KeyEvent.KEYCODE_DPAD_LEFT ||
+                                     code == KeyEvent.KEYCODE_DPAD_RIGHT)) {
+                                    showControls(focusProgress = true, pauseVideo = false)
+                                    true
+                                } else false
                             }
                             requestFocus()
                         } },
