@@ -1796,6 +1796,36 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                             .padding(12.dp),
                         horizontalAlignment = Alignment.Start
                     ) {
+                        Text("Playback position", color = Color.White, fontSize = 13.sp)
+                        TvTextButton(
+                            onClick = {
+                                nativePlayer.seekTo(seekPosition)
+                                seekBarFocused = false
+                            },
+                            modifier = Modifier.focusRequester(seekBarRequester)
+                                .onFocusChanged {
+                                    if (it.isFocused) {
+                                        seekBarFocused = true
+                                        seekPosition = nativePlayer.currentPosition.coerceAtLeast(0L)
+                                    } else if (seekBarFocused) seekBarFocused = false
+                                }
+                        ) {
+                            val duration = playbackDuration.coerceAtLeast(1L)
+                            val progress = (seekPosition.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
+                            val elapsed = seekPosition / 1000L
+                            val total = playbackDuration / 1000L
+                            val elapsedLabel = "%02d:%02d".format(elapsed / 60, elapsed % 60)
+                            val totalLabel = "%02d:%02d".format(total / 60, total % 60)
+                            Column(Modifier.widthIn(min = 180.dp, max = 420.dp)) {
+                                Box(Modifier.fillMaxWidth().height(6.dp)
+                                    .background(Color.DarkGray, RoundedCornerShape(4.dp))) {
+                                    Box(Modifier.fillMaxWidth(progress).height(6.dp)
+                                        .background(Color(0xFFFFD600), RoundedCornerShape(4.dp)))
+                                }
+                                Text("$elapsedLabel / $totalLabel   ← 10s  ·  10s →",
+                                    color = Color.White, fontSize = 12.sp)
+                            }
+                        }
                         TvTextButton(
                             onClick = { fullscreenControlsVisible = false },
                             modifier = Modifier.focusRequester(fullscreenMenuRequester)
