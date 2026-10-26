@@ -4,6 +4,8 @@ import android.annotation.SuppressLint
 import android.graphics.Bitmap
 import android.os.Bundle
 import android.view.KeyEvent
+import android.content.Context
+import android.content.ContextWrapper
 import android.view.WindowManager
 import android.view.View
 import android.view.ViewGroup
@@ -74,6 +76,11 @@ private val background = Color(0xFF101015)
 private val panel = Color(0xFF24242D)
 private val accent = Color(0xFFE63B45)
 private const val site = "https://farsiplex.com"
+private tailrec fun findMainActivity(context: Context): MainActivity? = when (context) {
+    is MainActivity -> context
+    is ContextWrapper -> if (context.baseContext === context) null else findMainActivity(context.baseContext)
+    else -> null
+}
 
 private data class TitleItem(val title: String, val page: String, val poster: String?, val series: Boolean)
 private data class EpisodeItem(val name: String, val page: String, val season: Int, val number: Int)
@@ -1271,7 +1278,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     var checkingQualityVariants by remember(url) { mutableStateOf(false) }
     var playerMessage by remember(url) { mutableStateOf("Opening the final player…") }
     val nativePlayer = remember(url) { ExoPlayer.Builder(context).build() }
-    val activity = context as? MainActivity
+    val activity = findMainActivity(context)
     LaunchedEffect(nativePlayer, fullscreenControlsVisible) {
         while (fullscreenControlsVisible) {
             currentPlaybackPosition = nativePlayer.currentPosition.coerceAtLeast(0L)
@@ -1288,8 +1295,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
         fullscreenControlsVisible = true
         seekBarFocused = false
     }
-    DisposableEffect(activity, nativePlayer) {
-        if (activity != null) activity.remoteMediaHandler = { code ->
+    val handleRemoteKey: (Int) -> Boolean = { code ->
             if (nativePlayer.currentMediaItem == null) false else {
                 when (code) {
                     KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
@@ -1337,8 +1343,10 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                     else -> false
                 }
             }
-        }
-        onDispose { if (activity != null) activity.remoteMediaHandler = null }
+    }
+    SideEffect { activity?.remoteMediaHandler = handleRemoteKey }
+    DisposableEffect(activity) {
+        onDispose { activity?.remoteMediaHandler = null }
     }
     DisposableEffect(nativePlayer) {
         val listener = object : Player.Listener {
@@ -1794,23 +1802,16 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                             useController = true
                             isFocusable = true
                             isFocusableInTouchMode = true
-                            setOnKeyListener { _, code, event ->
-                                if (event.action != KeyEvent.ACTION_DOWN || event.repeatCount != 0) false
-                                else if (nativeFullscreen &&
-                                    (code == KeyEvent.KEYCODE_DPAD_CENTER ||
-                                     code == KeyEvent.KEYCODE_ENTER)) {
-                                    showControls(focusProgress = false, pauseVideo = true)
-                                    true
-                                } else if (nativeFullscreen &&
-                                    (code == KeyEvent.KEYCODE_DPAD_LEFT ||
-                                     code == KeyEvent.KEYCODE_DPAD_RIGHT)) {
-                                    showControls(focusProgress = true, pauseVideo = false)
-                                    true
-                                } else false
-                            }
                             requestFocus()
                         } },
-                        update = { if (it.player !== nativePlayer) it.player = nativePlayer; it.useController = !nativeFullscreen },
+                        update = {
+                            if (it.player !== nativePlayer) it.player = nativePlayer
+                            it.useController = !nativeFullscreen
+                            it.setOnKeyListener { _, code, event ->
+                                event.action == KeyEvent.ACTION_DOWN &&
+                                    event.repeatCount == 0 && handleRemoteKey(code)
+                            }
+                        },
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
