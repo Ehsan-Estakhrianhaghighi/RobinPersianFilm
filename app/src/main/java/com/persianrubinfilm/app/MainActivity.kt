@@ -2,6 +2,8 @@ package com.persianrubinfilm.app
 
 import android.annotation.SuppressLint
 import android.graphics.Bitmap
+import android.graphics.drawable.Drawable
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.view.KeyEvent
 import android.content.Context
@@ -9,6 +11,7 @@ import android.content.ContextWrapper
 import android.view.WindowManager
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewParent
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -76,6 +79,37 @@ private val background = Color(0xFF101015)
 private val panel = Color(0xFF24242D)
 private val accent = Color(0xFFE63B45)
 private const val site = "https://farsiplex.com"
+
+/** Highlight the currently focused native Media3 control, including its seek bar
+ * and settings buttons, without substituting custom controls for Media3's.
+ */
+private fun installYellowMediaFocus(view: PlayerView) {
+    val previous = mutableMapOf<View, Drawable?>()
+    fun belongsToPlayer(child: View): Boolean {
+        var parent: ViewParent? = child.parent
+        while (parent != null) {
+            if (parent === view) return true
+            parent = parent.parent
+        }
+        return false
+    }
+    view.viewTreeObserver.addOnGlobalFocusChangeListener { oldView, newView ->
+        if (oldView != null && previous.containsKey(oldView)) {
+            oldView.foreground = previous.remove(oldView)
+        }
+        if (newView != null && newView !== view &&
+            belongsToPlayer(newView) && !previous.containsKey(newView)) {
+            previous[newView] = newView.foreground
+            val density = view.resources.displayMetrics.density
+            newView.foreground = GradientDrawable().apply {
+                cornerRadius = 9f * density
+                setColor(0x665C4B00)
+                setStroke((3f * density).toInt().coerceAtLeast(2), 0xFFFFD600.toInt())
+            }
+        }
+    }
+}
+
 private tailrec fun findMainActivity(context: Context): MainActivity? = when (context) {
     is MainActivity -> context
     is ContextWrapper -> if (context.baseContext === context) null else findMainActivity(context.baseContext)
@@ -1263,88 +1297,55 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     var nativeSources by remember(url) { mutableStateOf<List<NativeVideoSource>>(emptyList()) }
     var nativeChoice by remember(url) { mutableStateOf<NativeVideoSource?>(null) }
     var nativeFullscreen by remember(url) { mutableStateOf(false) }
-    var fullscreenControlsVisible by remember(url) { mutableStateOf(false) }
-    var seekBarFocused by remember(url) { mutableStateOf(false) }
-    var openOnSeekBar by remember(url) { mutableStateOf(false) }
-    var seekPosition by remember(url) { mutableLongStateOf(0L) }
-    var currentPlaybackPosition by remember(url) { mutableLongStateOf(0L) }
-    var playbackDuration by remember(url) { mutableLongStateOf(0L) }
-    val fullscreenMenuRequester = remember { FocusRequester() }
-    var playerIsPlaying by remember(url) { mutableStateOf(false) }
-    val seekBarRequester = remember { FocusRequester() }
-    val fullscreenVideoRequester = remember { FocusRequester() }
+    var nativeControlsVisible by remember(url) { mutableStateOf(false) }
+    var nativePlayerView by remember(url) { mutableStateOf<PlayerView?>(null) }
     val fullscreenForKeys by rememberUpdatedState(nativeFullscreen)
-    val controlsForKeys by rememberUpdatedState(fullscreenControlsVisible)
-    val seekFocusedForKeys by rememberUpdatedState(seekBarFocused)
+    val controlsForKeys by rememberUpdatedState(nativeControlsVisible)
     var pendingSourceChange by remember(url) { mutableStateOf(false) }
     var checkingQualityVariants by remember(url) { mutableStateOf(false) }
     var playerMessage by remember(url) { mutableStateOf("Opening the final player…") }
     val nativePlayer = remember(url) { ExoPlayer.Builder(context).build() }
     val activity = findMainActivity(context)
-    LaunchedEffect(nativePlayer, fullscreenControlsVisible) {
-        while (fullscreenControlsVisible) {
-            currentPlaybackPosition = nativePlayer.currentPosition.coerceAtLeast(0L)
-            playbackDuration = nativePlayer.duration.coerceAtLeast(0L)
-            delay(350L)
+    fun revealNativeControls(pause: Boolean, focusProgress: Boolean = false) {
+        if (pause) nativePlayer.pause()
+        nativePlayerView?.showController()
+        nativePlayerView?.post {
+            val controlId = if (focusProgress) "exo_progress" else "exo_play_pause"
+            val foundId = context.resources.getIdentifier(controlId, "id", context.packageName)
+            val focus = if (foundId != 0) nativePlayerView?.findViewById<View>(foundId) else null
+            focus?.requestFocus()
         }
     }
-    fun showControls(focusProgress: Boolean, pauseVideo: Boolean) {
-        if (pauseVideo) nativePlayer.pause()
-        seekPosition = nativePlayer.currentPosition.coerceAtLeast(0L)
-        currentPlaybackPosition = seekPosition
-        playbackDuration = nativePlayer.duration.coerceAtLeast(0L)
-        openOnSeekBar = focusProgress
-        fullscreenControlsVisible = true
-        seekBarFocused = false
-    }
     val handleRemoteKey: (Int) -> Boolean = { code ->
-            if (nativePlayer.currentMediaItem == null) false else {
-                when (code) {
-                    KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
-                        if (nativePlayer.isPlaying) nativePlayer.pause() else nativePlayer.play()
-                        true
-                    }
-                    KeyEvent.KEYCODE_MEDIA_PLAY -> { nativePlayer.play(); true }
-                    KeyEvent.KEYCODE_MEDIA_PAUSE, KeyEvent.KEYCODE_MEDIA_STOP -> {
-                        nativePlayer.pause(); true
-                    }
-                    KeyEvent.KEYCODE_MEDIA_FAST_FORWARD, KeyEvent.KEYCODE_MEDIA_NEXT -> {
-                        nativePlayer.seekTo((nativePlayer.currentPosition + 15_000L)
-                            .coerceAtMost(nativePlayer.duration.takeIf { it > 0 } ?: Long.MAX_VALUE))
-                        true
-                    }
-                    KeyEvent.KEYCODE_MEDIA_REWIND, KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
-                        nativePlayer.seekTo((nativePlayer.currentPosition - 10_000L).coerceAtLeast(0L))
-                        true
-                    }
-                    KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                        if (!fullscreenForKeys) false
-                        else if (!controlsForKeys) {
-                            // First press reveals the seek bar; no jump yet.
-                            showControls(focusProgress = true, pauseVideo = false)
-                            true
-                        } else if (seekFocusedForKeys) {
-                            val delta = if (code == KeyEvent.KEYCODE_DPAD_RIGHT) 10_000L else -10_000L
-                            val duration = nativePlayer.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
-                            seekPosition = (seekPosition + delta).coerceIn(0L, duration)
-                            true
-                        } else false
-                    }
-                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
-                    KeyEvent.KEYCODE_NUMPAD_ENTER -> {
-                        if (!fullscreenForKeys) false
-                        else if (!controlsForKeys) {
-                            showControls(focusProgress = false, pauseVideo = true)
-                            true
-                        } else if (seekFocusedForKeys) {
-                            nativePlayer.seekTo(seekPosition)
-                            seekBarFocused = false
-                            true
-                        } else false
-                    }
-                    else -> false
-                }
+        if (nativePlayer.currentMediaItem == null) false else when (code) {
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
+                if (nativePlayer.isPlaying) nativePlayer.pause() else nativePlayer.play()
+                true
             }
+            KeyEvent.KEYCODE_MEDIA_PLAY -> { nativePlayer.play(); true }
+            KeyEvent.KEYCODE_MEDIA_PAUSE, KeyEvent.KEYCODE_MEDIA_STOP -> {
+                nativePlayer.pause(); true
+            }
+            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD, KeyEvent.KEYCODE_MEDIA_NEXT -> {
+                nativePlayer.seekTo((nativePlayer.currentPosition + 15_000L)
+                    .coerceAtMost(nativePlayer.duration.takeIf { it > 0 } ?: Long.MAX_VALUE))
+                true
+            }
+            KeyEvent.KEYCODE_MEDIA_REWIND, KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
+                nativePlayer.seekTo((nativePlayer.currentPosition - 10_000L).coerceAtLeast(0L))
+                true
+            }
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER,
+            KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                if (!fullscreenForKeys || controlsForKeys) false
+                else { revealNativeControls(pause = true); true }
+            }
+            KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                if (!fullscreenForKeys || controlsForKeys) false
+                else { revealNativeControls(pause = false, focusProgress = true); true }
+            }
+            else -> false
+        }
     }
     SideEffect { activity?.remoteMediaHandler = handleRemoteKey }
     DisposableEffect(activity) {
@@ -1681,22 +1682,12 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     }
     DisposableEffect(web) { onDispose { web.stopLoading(); web.onPause(); web.destroy() } }
     BackHandler(nativeFullscreen) {
-        fullscreenControlsVisible = false
         nativeFullscreen = false
     }
     LaunchedEffect(nativeFullscreen) {
-        fullscreenControlsVisible = false
-        seekBarFocused = false
-    }
-    LaunchedEffect(nativeFullscreen, fullscreenControlsVisible) {
         if (nativeFullscreen) {
-            delay(100)
-            if (fullscreenControlsVisible) {
-                if (openOnSeekBar) seekBarRequester.requestFocus()
-                else fullscreenMenuRequester.requestFocus()
-            } else {
-                fullscreenVideoRequester.requestFocus()
-            }
+            nativePlayerView?.hideController()
+            nativeControlsVisible = false
         }
     }
     BackHandler(customView != null) {
@@ -1804,17 +1795,31 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
             Box(Modifier.fillMaxSize().weight(1f)) {
                 if (nativeChoice != null) {
                     AndroidView(
-                        factory = { PlayerView(it).apply {
-                            player = nativePlayer
-                            useController = true
-                            isFocusable = true
-                            isFocusableInTouchMode = true
-                            requestFocus()
-                        } },
-                        update = {
-                            if (it.player !== nativePlayer) it.player = nativePlayer
-                            it.useController = !nativeFullscreen
-                            it.setOnKeyListener { _, code, event ->
+                        factory = { ctx ->
+                            PlayerView(ctx).apply {
+                                player = nativePlayer
+                                useController = true
+                                controllerAutoShow = false
+                                controllerShowTimeoutMs = 3500
+                                controllerHideOnTouch = true
+                                isFocusable = true
+                                isFocusableInTouchMode = true
+                                setFullscreenButtonClickListener { isFullscreen ->
+                                    nativeFullscreen = isFullscreen
+                                }
+                                setControllerVisibilityListener(PlayerView.ControllerVisibilityListener { visibility ->
+                                    nativeControlsVisible = visibility == View.VISIBLE
+                                })
+                                installYellowMediaFocus(this)
+                                nativePlayerView = this
+                            }
+                        },
+                        update = { view ->
+                            if (view.player !== nativePlayer) view.player = nativePlayer
+                            view.useController = true
+                            view.setFullscreenButtonState(nativeFullscreen)
+                            view.controllerShowTimeoutMs = if (nativePlayer.isPlaying) 3500 else 0
+                            view.setOnKeyListener { _, code, event ->
                                 event.action == KeyEvent.ACTION_DOWN &&
                                     event.repeatCount == 0 && handleRemoteKey(code)
                             }
@@ -1824,91 +1829,12 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                 } else {
                     AndroidView(factory = { web }, modifier = Modifier.fillMaxSize())
                 }
-                // PlayerView's own controller is hidden in fullscreen, so add an
-                // app-owned surface. It catches both phone taps and Fire TV OK.
-                // When controls open, remove this surface so their buttons can receive input.
-                if (nativeFullscreen && nativeChoice != null && !fullscreenControlsVisible) {
-                    Box(
-                        modifier = Modifier.fillMaxSize()
-                            .focusRequester(fullscreenVideoRequester)
-                            .clickable {
-                                showControls(focusProgress = false, pauseVideo = true)
-                            }
-                    )
-                }
-                // Controls appear only after OK/tap; they are not permanently displayed.
-
-                if (nativeFullscreen && nativeChoice != null && fullscreenControlsVisible) {
-                    Column(
-                        modifier = Modifier.align(Alignment.BottomCenter)
-                            .fillMaxWidth()
-                            .background(Color(0xE5101015), RoundedCornerShape(14.dp))
-                            .padding(horizontal = 16.dp, vertical = 8.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                            TvTextButton(onClick = {
-                                fullscreenControlsVisible = false
-                                nativeFullscreen = false
-                            }) { Text("Exit fullscreen", color = Color.White, fontSize = 14.sp) }
-                        }
-                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically) {
-                            TvTextButton(onClick = {
-                                nativePlayer.seekTo((nativePlayer.currentPosition - 10_000L).coerceAtLeast(0L))
-                                seekPosition = nativePlayer.currentPosition.coerceAtLeast(0L)
-                            }) { Text("↶ 10s", color = Color.White, fontSize = 20.sp) }
-                            Spacer(Modifier.width(16.dp))
-                            TvTextButton(onClick = {
-                                if (nativePlayer.isPlaying) nativePlayer.pause() else {
-                                    nativePlayer.play()
-                                    fullscreenControlsVisible = false
-                                }
-                            }, modifier = Modifier.focusRequester(fullscreenMenuRequester)) {
-                                Text(if (playerIsPlaying) "Ⅱ Pause" else "▶ Play",
-                                    color = Color.White, fontSize = 22.sp)
-                            }
-                            Spacer(Modifier.width(16.dp))
-                            TvTextButton(onClick = {
-                                val end = nativePlayer.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
-                                nativePlayer.seekTo((nativePlayer.currentPosition + 10_000L).coerceAtMost(end))
-                                seekPosition = nativePlayer.currentPosition.coerceAtLeast(0L)
-                            }) { Text("10s ↷", color = Color.White, fontSize = 20.sp) }
-                        }
-                        TvTextButton(
-                            onClick = {
-                                nativePlayer.seekTo(seekPosition)
-                                seekBarFocused = false
-                            },
-                            modifier = Modifier.fillMaxWidth()
-                                .focusRequester(seekBarRequester)
-                                .onFocusChanged { state ->
-                                    if (state.isFocused && !seekBarFocused) {
-                                        seekBarFocused = true
-                                        seekPosition = nativePlayer.currentPosition.coerceAtLeast(0L)
-                                    } else if (!state.isFocused) seekBarFocused = false
-                                }
-                        ) {
-                            val maxDuration = playbackDuration.coerceAtLeast(1L)
-                            val shownPosition = if (seekBarFocused) seekPosition else currentPlaybackPosition
-                            val fraction = (shownPosition.toFloat() / maxDuration.toFloat()).coerceIn(0f, 1f)
-                            Column(Modifier.fillMaxWidth()) {
-                                Box(Modifier.fillMaxWidth().height(7.dp)
-                                    .background(Color.DarkGray, RoundedCornerShape(4.dp))) {
-                                    Box(Modifier.fillMaxWidth(fraction).height(7.dp)
-                                        .background(Color(0xFFFFD600), RoundedCornerShape(4.dp)))
-                                }
-                                val elapsed = shownPosition / 1000L
-                                val total = playbackDuration / 1000L
-                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                    Text("%02d:%02d:%02d".format(elapsed / 3600, (elapsed / 60) % 60, elapsed % 60),
-                                        color = Color.White, fontSize = 12.sp)
-                                    Text("%02d:%02d:%02d".format(total / 3600, (total / 60) % 60, total % 60),
-                                        color = Color.White, fontSize = 12.sp)
-                                }
-                            }
-                        }
-                    }
+                // A transparent surface is only needed while the native controller is
+                // hidden. When controls are visible, Media3 receives all taps and D-pad keys.
+                if (nativeFullscreen && nativeChoice != null && !nativeControlsVisible) {
+                    Box(Modifier.fillMaxSize().clickable {
+                        revealNativeControls(pause = true)
+                    })
                 }
                 if (!showWebContent && nativeChoice == null) {
                     Box(Modifier.fillMaxSize().background(Color.Black), contentAlignment = Alignment.Center) {
