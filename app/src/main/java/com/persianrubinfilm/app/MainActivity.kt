@@ -1614,6 +1614,10 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     }
     DisposableEffect(web) { onDispose { web.stopLoading(); web.onPause(); web.destroy() } }
     BackHandler(nativeFullscreen) { nativeFullscreen = false }
+    LaunchedEffect(nativeFullscreen) {
+        if (nativeFullscreen) exitFullscreenRequester.requestFocus()
+        else exitFullscreenFocused = false
+    }
     BackHandler(customView != null) {
         customCallback?.onCustomViewHidden(); customView = null; customCallback = null
     }
@@ -1724,6 +1728,26 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                             useController = true
                             isFocusable = true
                             isFocusableInTouchMode = true
+                            setOnKeyListener { _, code, event ->
+                                if (event.action != KeyEvent.ACTION_DOWN ||
+                                    event.repeatCount != 0) false
+                                else when (code) {
+                                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER -> {
+                                        if (nativePlayer.isPlaying) nativePlayer.pause() else nativePlayer.play()
+                                        true
+                                    }
+                                    KeyEvent.KEYCODE_DPAD_LEFT -> {
+                                        nativePlayer.seekTo((nativePlayer.currentPosition - 10_000L).coerceAtLeast(0L))
+                                        true
+                                    }
+                                    KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                                        nativePlayer.seekTo((nativePlayer.currentPosition + 10_000L)
+                                            .coerceAtMost(nativePlayer.duration.takeIf { it > 0 } ?: Long.MAX_VALUE))
+                                        true
+                                    }
+                                    else -> false
+                                }
+                            }
                             requestFocus()
                         } },
                         update = { it.player = nativePlayer },
@@ -1733,9 +1757,11 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                     AndroidView(factory = { web }, modifier = Modifier.fillMaxSize())
                 }
                 if (nativeFullscreen && nativeChoice != null) {
-                    TextButton(
+                    TvTextButton(
                         onClick = { nativeFullscreen = false },
                         modifier = Modifier.align(Alignment.TopEnd)
+                            .focusRequester(exitFullscreenRequester)
+                            .onFocusChanged { exitFullscreenFocused = it.hasFocus }
                     ) { Text("Exit full screen", color = Color.White) }
                 }
                 if (!showWebContent && nativeChoice == null) {
