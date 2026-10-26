@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.graphics.Bitmap
 import android.os.Bundle
 import android.view.KeyEvent
+import android.view.WindowManager
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.WebChromeClient
@@ -42,6 +43,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
@@ -217,17 +220,7 @@ class MainActivity : ComponentActivity() {
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-            val code = event.keyCode
-            if (code == KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE ||
-                code == KeyEvent.KEYCODE_MEDIA_PLAY ||
-                code == KeyEvent.KEYCODE_MEDIA_PAUSE ||
-                code == KeyEvent.KEYCODE_MEDIA_STOP ||
-                code == KeyEvent.KEYCODE_MEDIA_FAST_FORWARD ||
-                code == KeyEvent.KEYCODE_MEDIA_REWIND ||
-                code == KeyEvent.KEYCODE_MEDIA_NEXT ||
-                code == KeyEvent.KEYCODE_MEDIA_PREVIOUS) {
-                if (remoteMediaHandler?.invoke(code) == true) return true
-            }
+            if (remoteMediaHandler?.invoke(event.keyCode) == true) return true
         }
         return super.dispatchKeyEvent(event)
     }
@@ -238,10 +231,14 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun TvTextButton(onClick: () -> Unit, content: @Composable RowScope.() -> Unit) {
+private fun TvTextButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    content: @Composable RowScope.() -> Unit
+) {
     var focused by remember { mutableStateOf(false) }
     TextButton(onClick = onClick,
-        modifier = Modifier.onFocusChanged { focused = it.hasFocus }
+        modifier = modifier.onFocusChanged { focused = it.hasFocus }
             .border(if (focused) 2.dp else 0.dp,
                 if (focused) accent else Color.Transparent, RoundedCornerShape(8.dp)),
         content = content)
@@ -1232,6 +1229,10 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     var nativeSources by remember(url) { mutableStateOf<List<NativeVideoSource>>(emptyList()) }
     var nativeChoice by remember(url) { mutableStateOf<NativeVideoSource?>(null) }
     var nativeFullscreen by remember(url) { mutableStateOf(false) }
+    var exitFullscreenFocused by remember(url) { mutableStateOf(false) }
+    val exitFullscreenRequester = remember { FocusRequester() }
+    val fullscreenForKeys by rememberUpdatedState(nativeFullscreen)
+    val exitFocusedForKeys by rememberUpdatedState(exitFullscreenFocused)
     var pendingSourceChange by remember(url) { mutableStateOf(false) }
     var checkingQualityVariants by remember(url) { mutableStateOf(false) }
     var playerMessage by remember(url) { mutableStateOf("Opening the final player…") }
@@ -1241,30 +1242,64 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
         if (activity != null) activity.remoteMediaHandler = { code ->
             if (nativePlayer.currentMediaItem == null) false else {
                 when (code) {
-                    KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE ->
+                    KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> {
                         if (nativePlayer.isPlaying) nativePlayer.pause() else nativePlayer.play()
-                    KeyEvent.KEYCODE_MEDIA_PLAY -> nativePlayer.play()
-                    KeyEvent.KEYCODE_MEDIA_PAUSE, KeyEvent.KEYCODE_MEDIA_STOP -> nativePlayer.pause()
-                    KeyEvent.KEYCODE_MEDIA_FAST_FORWARD, KeyEvent.KEYCODE_MEDIA_NEXT ->
+                        true
+                    }
+                    KeyEvent.KEYCODE_MEDIA_PLAY -> { nativePlayer.play(); true }
+                    KeyEvent.KEYCODE_MEDIA_PAUSE, KeyEvent.KEYCODE_MEDIA_STOP -> {
+                        nativePlayer.pause(); true
+                    }
+                    KeyEvent.KEYCODE_MEDIA_FAST_FORWARD, KeyEvent.KEYCODE_MEDIA_NEXT -> {
                         nativePlayer.seekTo((nativePlayer.currentPosition + 15_000L)
                             .coerceAtMost(nativePlayer.duration.takeIf { it > 0 } ?: Long.MAX_VALUE))
-                    KeyEvent.KEYCODE_MEDIA_REWIND, KeyEvent.KEYCODE_MEDIA_PREVIOUS ->
+                        true
+                    }
+                    KeyEvent.KEYCODE_MEDIA_REWIND, KeyEvent.KEYCODE_MEDIA_PREVIOUS -> {
                         nativePlayer.seekTo((nativePlayer.currentPosition - 10_000L).coerceAtLeast(0L))
+                        true
+                    }
+                    KeyEvent.KEYCODE_DPAD_LEFT -> {
+                        if (!fullscreenForKeys) false else {
+                            nativePlayer.seekTo((nativePlayer.currentPosition - 10_000L).coerceAtLeast(0L))
+                            true
+                        }
+                    }
+                    KeyEvent.KEYCODE_DPAD_RIGHT -> {
+                        if (!fullscreenForKeys) false else {
+                            nativePlayer.seekTo((nativePlayer.currentPosition + 10_000L)
+                                .coerceAtMost(nativePlayer.duration.takeIf { it > 0 } ?: Long.MAX_VALUE))
+                            true
+                        }
+                    }
+                    KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                        if (!fullscreenForKeys || exitFocusedForKeys) false else {
+                            if (nativePlayer.isPlaying) nativePlayer.pause() else nativePlayer.play()
+                            true
+                        }
+                    }
+                    else -> false
                 }
-                true
             }
         }
         onDispose { if (activity != null) activity.remoteMediaHandler = null }
     }
     DisposableEffect(nativePlayer) {
         val listener = object : Player.Listener {
+            override fun onIsPlayingChanged(isPlaying: Boolean) {
+                if (isPlaying) activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                else activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            }
             override fun onPlayerError(error: PlaybackException) {
                 nativeChoice = null
                 playerMessage = "Native stream unavailable; returning to provider controls"
             }
         }
         nativePlayer.addListener(listener)
-        onDispose { nativePlayer.removeListener(listener) }
+        onDispose {
+            nativePlayer.removeListener(listener)
+            activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
     }
     DisposableEffect(nativePlayer) { onDispose { nativePlayer.release() } }
     LaunchedEffect(nativeChoice) {
