@@ -1231,6 +1231,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     var nativeFullscreen by remember(url) { mutableStateOf(false) }
     var fullscreenControlsVisible by remember(url) { mutableStateOf(false) }
     var seekBarFocused by remember(url) { mutableStateOf(false) }
+    var openOnSeekBar by remember(url) { mutableStateOf(false) }
     var seekPosition by remember(url) { mutableLongStateOf(0L) }
     var currentPlaybackPosition by remember(url) { mutableLongStateOf(0L) }
     var playbackDuration by remember(url) { mutableLongStateOf(0L) }
@@ -1256,8 +1257,9 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
         seekPosition = nativePlayer.currentPosition.coerceAtLeast(0L)
         currentPlaybackPosition = seekPosition
         playbackDuration = nativePlayer.duration.coerceAtLeast(0L)
+        openOnSeekBar = focusProgress
         fullscreenControlsVisible = true
-        seekBarFocused = focusProgress
+        seekBarFocused = false
     }
     DisposableEffect(activity, nativePlayer) {
         if (activity != null) activity.remoteMediaHandler = { code ->
@@ -1648,10 +1650,10 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
         fullscreenControlsVisible = false
         seekBarFocused = false
     }
-    LaunchedEffect(fullscreenControlsVisible, seekBarFocused) {
+    LaunchedEffect(fullscreenControlsVisible) {
         if (nativeFullscreen && fullscreenControlsVisible) {
             delay(100)
-            if (seekBarFocused) seekBarRequester.requestFocus()
+            if (openOnSeekBar) seekBarRequester.requestFocus()
             else fullscreenMenuRequester.requestFocus()
         }
     }
