@@ -1271,6 +1271,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     var playbackDuration by remember(url) { mutableLongStateOf(0L) }
     val fullscreenMenuRequester = remember { FocusRequester() }
     val seekBarRequester = remember { FocusRequester() }
+    val fullscreenVideoRequester = remember { FocusRequester() }
     val fullscreenForKeys by rememberUpdatedState(nativeFullscreen)
     val controlsForKeys by rememberUpdatedState(fullscreenControlsVisible)
     val seekFocusedForKeys by rememberUpdatedState(seekBarFocused)
@@ -1685,11 +1686,15 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
         fullscreenControlsVisible = false
         seekBarFocused = false
     }
-    LaunchedEffect(fullscreenControlsVisible) {
-        if (nativeFullscreen && fullscreenControlsVisible) {
+    LaunchedEffect(nativeFullscreen, fullscreenControlsVisible) {
+        if (nativeFullscreen) {
             delay(100)
-            if (openOnSeekBar) seekBarRequester.requestFocus()
-            else fullscreenMenuRequester.requestFocus()
+            if (fullscreenControlsVisible) {
+                if (openOnSeekBar) seekBarRequester.requestFocus()
+                else fullscreenMenuRequester.requestFocus()
+            } else {
+                fullscreenVideoRequester.requestFocus()
+            }
         }
     }
     BackHandler(customView != null) {
@@ -1817,8 +1822,19 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                 } else {
                     AndroidView(factory = { web }, modifier = Modifier.fillMaxSize())
                 }
-                // The screen stays clean during playback. Fire Stick OK opens
-                // the controls; Up/Down navigates and Back closes them.
+                // PlayerView's own controller is hidden in fullscreen, so add an
+                // app-owned surface. It catches both phone taps and Fire TV OK.
+                // When controls open, remove this surface so their buttons can receive input.
+                if (nativeFullscreen && nativeChoice != null && !fullscreenControlsVisible) {
+                    Box(
+                        modifier = Modifier.fillMaxSize()
+                            .focusRequester(fullscreenVideoRequester)
+                            .clickable {
+                                showControls(focusProgress = false, pauseVideo = true)
+                            }
+                    )
+                }
+                // Controls appear only after OK/tap; they are not permanently displayed.
                 if (nativeFullscreen && nativeChoice != null && fullscreenControlsVisible) {
                     Column(
                         modifier = Modifier.align(Alignment.CenterEnd)
