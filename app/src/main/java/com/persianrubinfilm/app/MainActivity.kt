@@ -1270,6 +1270,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     var currentPlaybackPosition by remember(url) { mutableLongStateOf(0L) }
     var playbackDuration by remember(url) { mutableLongStateOf(0L) }
     val fullscreenMenuRequester = remember { FocusRequester() }
+    var playerIsPlaying by remember(url) { mutableStateOf(false) }
     val seekBarRequester = remember { FocusRequester() }
     val fullscreenVideoRequester = remember { FocusRequester() }
     val fullscreenForKeys by rememberUpdatedState(nativeFullscreen)
@@ -1352,6 +1353,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     DisposableEffect(nativePlayer) {
         val listener = object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
+                playerIsPlaying = isPlaying
                 if (isPlaying) activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 else activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             }
@@ -1835,77 +1837,77 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                     )
                 }
                 // Controls appear only after OK/tap; they are not permanently displayed.
+
                 if (nativeFullscreen && nativeChoice != null && fullscreenControlsVisible) {
                     Column(
-                        modifier = Modifier.align(Alignment.CenterEnd)
-                            .fillMaxHeight(0.92f)
-                            .widthIn(min = 230.dp, max = 400.dp)
-                            .background(Color(0xF5101015), RoundedCornerShape(12.dp))
-                            .verticalScroll(rememberScrollState())
-                            .padding(12.dp),
-                        horizontalAlignment = Alignment.Start
+                        modifier = Modifier.align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .background(Color(0xE5101015), RoundedCornerShape(14.dp))
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
                     ) {
-                        Text("Playback position", color = Color.White, fontSize = 13.sp)
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            TvTextButton(onClick = {
+                                fullscreenControlsVisible = false
+                                nativeFullscreen = false
+                            }) { Text("Exit fullscreen", color = Color.White, fontSize = 14.sp) }
+                        }
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically) {
+                            TvTextButton(onClick = {
+                                nativePlayer.seekTo((nativePlayer.currentPosition - 10_000L).coerceAtLeast(0L))
+                                seekPosition = nativePlayer.currentPosition.coerceAtLeast(0L)
+                            }) { Text("↶ 10s", color = Color.White, fontSize = 20.sp) }
+                            Spacer(Modifier.width(16.dp))
+                            TvTextButton(onClick = {
+                                if (nativePlayer.isPlaying) nativePlayer.pause() else {
+                                    nativePlayer.play()
+                                    fullscreenControlsVisible = false
+                                }
+                            }, modifier = Modifier.focusRequester(fullscreenMenuRequester)) {
+                                Text(if (playerIsPlaying) "Ⅱ Pause" else "▶ Play",
+                                    color = Color.White, fontSize = 22.sp)
+                            }
+                            Spacer(Modifier.width(16.dp))
+                            TvTextButton(onClick = {
+                                val end = nativePlayer.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
+                                nativePlayer.seekTo((nativePlayer.currentPosition + 10_000L).coerceAtMost(end))
+                                seekPosition = nativePlayer.currentPosition.coerceAtLeast(0L)
+                            }) { Text("10s ↷", color = Color.White, fontSize = 20.sp) }
+                        }
                         TvTextButton(
                             onClick = {
                                 nativePlayer.seekTo(seekPosition)
                                 seekBarFocused = false
                             },
-                            modifier = Modifier.focusRequester(seekBarRequester)
-                                .onFocusChanged {
-                                    if (it.isFocused) {
+                            modifier = Modifier.fillMaxWidth()
+                                .focusRequester(seekBarRequester)
+                                .onFocusChanged { state ->
+                                    if (state.isFocused && !seekBarFocused) {
                                         seekBarFocused = true
                                         seekPosition = nativePlayer.currentPosition.coerceAtLeast(0L)
-                                    } else if (seekBarFocused) seekBarFocused = false
+                                    } else if (!state.isFocused) seekBarFocused = false
                                 }
                         ) {
-                            val duration = playbackDuration.coerceAtLeast(1L)
-                            val progress = (seekPosition.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
-                            val elapsed = seekPosition / 1000L
-                            val total = playbackDuration / 1000L
-                            val elapsedLabel = "%02d:%02d".format(elapsed / 60, elapsed % 60)
-                            val totalLabel = "%02d:%02d".format(total / 60, total % 60)
-                            Column(Modifier.widthIn(min = 180.dp, max = 420.dp)) {
-                                Box(Modifier.fillMaxWidth().height(6.dp)
+                            val maxDuration = playbackDuration.coerceAtLeast(1L)
+                            val shownPosition = if (seekBarFocused) seekPosition else currentPlaybackPosition
+                            val fraction = (shownPosition.toFloat() / maxDuration.toFloat()).coerceIn(0f, 1f)
+                            Column(Modifier.fillMaxWidth()) {
+                                Box(Modifier.fillMaxWidth().height(7.dp)
                                     .background(Color.DarkGray, RoundedCornerShape(4.dp))) {
-                                    Box(Modifier.fillMaxWidth(progress).height(6.dp)
+                                    Box(Modifier.fillMaxWidth(fraction).height(7.dp)
                                         .background(Color(0xFFFFD600), RoundedCornerShape(4.dp)))
                                 }
-                                Text("$elapsedLabel / $totalLabel   ← 10s  ·  10s →",
-                                    color = Color.White, fontSize = 12.sp)
+                                val elapsed = shownPosition / 1000L
+                                val total = playbackDuration / 1000L
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text("%02d:%02d:%02d".format(elapsed / 3600, (elapsed / 60) % 60, elapsed % 60),
+                                        color = Color.White, fontSize = 12.sp)
+                                    Text("%02d:%02d:%02d".format(total / 3600, (total / 60) % 60, total % 60),
+                                        color = Color.White, fontSize = 12.sp)
+                                }
                             }
                         }
-                        TvTextButton(
-                            onClick = { fullscreenControlsVisible = false },
-                            modifier = Modifier.focusRequester(fullscreenMenuRequester)
-                        ) { Text("Close controls", color = Color.White) }
-                        TvTextButton(onClick = {
-                            fullscreenControlsVisible = false
-                            nativeFullscreen = false
-                        }) { Text("Exit full screen", color = Color.White) }
-                        TvTextButton(onClick = {
-                            if (nativePlayer.isPlaying) nativePlayer.pause() else nativePlayer.play()
-                        }) { Text("Play / Pause", color = Color.White) }
-                        Text("Quality", color = Color.White, fontSize = 13.sp)
-                        nativeSources.filter {
-                            nativeSourceGroupKey(it) == nativeChoice?.let(::nativeSourceGroupKey)
-                        }.distinctBy { it.quality }.forEach { source ->
-                            TvTextButton(onClick = {
-                                nativeChoice = source
-                                fullscreenControlsVisible = false
-                            }) {
-                                Text("${if (nativeChoice?.url == source.url) "✓ " else ""}${source.quality}p", color = Color.White)
-                            }
-                        }
-                        Text("Source", color = Color.White, fontSize = 13.sp)
-                        nativeSources.groupBy(::nativeSourceGroupKey).values.forEachIndexed { index, group ->
-                            val source = group.firstOrNull { it.quality == nativeChoice?.quality } ?: group.first()
-                            TvTextButton(onClick = {
-                                nativeChoice = source
-                                fullscreenControlsVisible = false
-                            }) { Text("Source ${index + 1}", color = Color.White) }
-                        }
-
                     }
                 }
                 if (!showWebContent && nativeChoice == null) {
