@@ -1383,7 +1383,6 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     // Cover every intermediate WebView page with an app-owned loading surface.
     // Revealing it on a timer was the cause of the unwanted preview flash.
     var showWebContent by remember(url) { mutableStateOf(false) }
-    var allowProviderFallback by remember(url) { mutableStateOf(false) }
     var manualContinuation by remember(url) { mutableStateOf(false) }
     var lastCompletedPage by remember(url) { mutableStateOf("") }
     // Discover the exact HTTPS media request that the legitimately loaded provider
@@ -1554,16 +1553,6 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                 }
             }
             loadUrl(url)
-        }
-    }
-    // A slow TV can take longer than 4.5 seconds to follow the intermediate
-    // pages. Never reveal them automatically on a timer. Offer an explicit
-    // fallback instead, so genuine provider access steps remain possible.
-    LaunchedEffect(web) {
-        delay(9000)
-        if (!showWebContent && nativeChoice == null) {
-            allowProviderFallback = true
-            playerMessage = "Still opening the final player…"
         }
     }
     // Check newly inserted offerwalls after page load, and keep moving through
@@ -1844,14 +1833,6 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                             Spacer(Modifier.height(12.dp))
                             Text("Opening the video player…", color = Color.White)
                             Text("Checking the selected video's playback page", color = Color.LightGray, fontSize = 12.sp)
-                            if (allowProviderFallback) {
-                                Spacer(Modifier.height(12.dp))
-                                TvButton(onClick = {
-                                    showWebContent = true
-                                    allowProviderFallback = false
-                                    playerMessage = "Continue in the provider player"
-                                }) { Text("Open provider page") }
-                            }
                         }
                     }
                 }
