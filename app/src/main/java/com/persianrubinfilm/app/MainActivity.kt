@@ -676,6 +676,53 @@ private const val startRequiredAccessAdScript = """
 
 /** Hide obvious ad banners without touching FarsiPlex's legitimate "View a short ad" unlock dialog.
  * An unlock wall is access control, not a removable popup. */
+/** Dismiss only an explicitly closable display-ad overlay in the first-party
+ * document. Never click the ad itself or any provider access/unlock control.
+ * Cross-origin frames and external Chrome tabs are deliberately not touched. */
+private const val dismissClosableDisplayAdScript = """
+(function(){
+  if(!/^(www\\.)?farsiplex\\.com$/i.test(location.hostname)) return 'not-first-party';
+  function visible(el){
+    if(!el||!el.getBoundingClientRect)return false;
+    var r=el.getBoundingClientRect(),s=getComputedStyle(el);
+    return r.width>6&&r.height>6&&s.display!=='none'&&s.visibility!=='hidden';
+  }
+  function protectedAccess(el){
+    for(var p=el,n=0;p&&n<7;n++,p=p.parentElement){
+      var t=(p.innerText||p.textContent||'').toLowerCase().slice(0,2000);
+      if(t.includes('unlock more content')&&t.includes('view a short ad'))return true;
+      if(p===document.body)break;
+    }
+    return false;
+  }
+  function adContainer(el){
+    for(var p=el,n=0;p&&n<5;n++,p=p.parentElement){
+      if(p===document.body)break;
+      var name=String(p.className||'')+' '+String(p.id||'')+' '+String(p.getAttribute('role')||'');
+      var adMarker=/\\b(advertisement|sponsored|ad-overlay|ad-popup|ad-modal|adsense|ad-container|ad-wrapper|google-auto-placed|interstitial)\\b/i.test(name);
+      var adIframe=!!p.querySelector('iframe[src*="doubleclick"],iframe[src*="googlesyndication"],ins.adsbygoogle,[data-ad-client]');
+      if(adMarker||adIframe)return p;
+    }
+    return null;
+  }
+  var candidates=[...document.querySelectorAll('button,a,[role="button"],[aria-label],[title]')];
+  for(var i=0;i<candidates.length;i++){
+    var button=candidates[i];
+    if(!visible(button)||protectedAccess(button))continue;
+    var label=(button.getAttribute('aria-label')||button.getAttribute('title')||button.innerText||button.textContent||'').trim().toLowerCase();
+    if(!/^(close|close ad|close advertisement|dismiss ad|×|✕|x)$/.test(label))continue;
+    var wrapper=adContainer(button);
+    if(!wrapper||!visible(wrapper)||protectedAccess(wrapper))continue;
+    // The button must be in the ad overlay, not the player or page navigation.
+    if(button.closest('[class*="player"],[id*="player"],video'))continue;
+    if(wrapper.contains(document.querySelector('video')||document.createElement('video')))continue;
+    button.click();
+    return 'closed-display-ad';
+  }
+  return 'nothing-to-close';
+})();
+"""
+
 private const val playerAdCleaner = """
 (function(){
   if (window.__robinAdCleanerInstalled) {
@@ -1507,6 +1554,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                     lastCompletedPage = loadedUrl.orEmpty()
                     val isFinal = isFinalPlayerPage(loadedUrl)
                     if (view == null) return
+                    view.evaluateJavascript(dismissClosableDisplayAdScript, null)
                     if (isFinal) {
                         // Do NOT delay reaching the final player for cosmetic scripts.
                         showWebContent = true
@@ -1569,6 +1617,9 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     LaunchedEffect(web) {
         while (true) {
             val atFinal = isFinalPlayerPage(web.url)
+            // Close first-party display ads with an actual Close button; keep
+            // required provider-access dialogs intact and interactable.
+            web.evaluateJavascript(dismissClosableDisplayAdScript, null)
             web.evaluateJavascript(startRequiredAccessAdScript) { raw ->
                 when (raw.removeSurrounding("\"")) {
                     "click-attempted", "click-pending" -> {
