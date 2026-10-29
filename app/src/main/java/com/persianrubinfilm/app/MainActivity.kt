@@ -681,7 +681,7 @@ private const val startRequiredAccessAdScript = """
  * Cross-origin frames and external Chrome tabs are deliberately not touched. */
 private const val dismissClosableDisplayAdScript = """
 (function(){
-  if(!/^(www\\.)?farsiplex\\.com$/i.test(location.hostname)) return 'not-first-party';
+  if(!/^(www\.)?farsiplex\.com$/i.test(location.hostname)) return 'not-first-party';
   function visible(el){
     if(!el||!el.getBoundingClientRect)return false;
     var r=el.getBoundingClientRect(),s=getComputedStyle(el);
@@ -699,7 +699,7 @@ private const val dismissClosableDisplayAdScript = """
     for(var p=el,n=0;p&&n<5;n++,p=p.parentElement){
       if(p===document.body)break;
       var name=String(p.className||'')+' '+String(p.id||'')+' '+String(p.getAttribute('role')||'');
-      var adMarker=/\\b(advertisement|sponsored|ad-overlay|ad-popup|ad-modal|adsense|ad-container|ad-wrapper|google-auto-placed|interstitial)\\b/i.test(name);
+      var adMarker=/\b(advertisement|sponsored|ad-overlay|ad-popup|ad-modal|adsense|ad-container|ad-wrapper|google-auto-placed|interstitial)\b/i.test(name);
       var adIframe=!!p.querySelector('iframe[src*="doubleclick"],iframe[src*="googlesyndication"],ins.adsbygoogle,[data-ad-client]');
       if(adMarker||adIframe)return p;
     }
