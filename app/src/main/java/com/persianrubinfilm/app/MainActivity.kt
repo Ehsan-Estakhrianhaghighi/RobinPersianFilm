@@ -1327,28 +1327,49 @@ private suspend fun verifyPublishedMediaUrl(rawUrl: String): Boolean = withConte
  * loaded player document. After the click, WebView observes the real media URL. */
 private const val startFinalPosterPlaybackScript = """
 (function(){
-  if(!/\/play-hq-player\/?/.test(location.pathname))return 'not-final';
-  if(window.__robinPosterPlayAttempted)return 'already-tried';
-  function visible(n){if(!n||!n.getBoundingClientRect)return false;
-    var r=n.getBoundingClientRect(),s=getComputedStyle(n);
-    return r.width>12&&r.height>12&&s.display!=='none'&&s.visibility!=='hidden';}
+  if(location.pathname.indexOf('/play-hq-player')!==0)return 'not-final';
+  function visible(n){
+    if(!n||!n.getBoundingClientRect)return false;
+    var r=n.getBoundingClientRect(),style=getComputedStyle(n);
+    return r.width>12&&r.height>12&&style.display!=='none'&&style.visibility!=='hidden';
+  }
+  // A genuine required-access prompt takes priority. Never click through it.
   var dialogs=[...document.querySelectorAll('[role="dialog"],[aria-modal="true"],.modal,.popup,[class*="unlock"]')];
-  if(dialogs.some(function(n){var t=(n.textContent||'').toLowerCase();
+  if(dialogs.some(function(n){
+    var t=(n.innerText||n.textContent||'').toLowerCase();
     return visible(n)&&t.includes('unlock more content')&&t.includes('view a short ad');
   }))return 'access-required';
-  var root=[...document.querySelectorAll('video,[class*="jwplayer"],[id*="jwplayer"],[class*="player-container"],[class*="video-player"]')]
-    .find(visible);
+  var roots=[...document.querySelectorAll('.jwplayer,[id^="jwplayer"],.jw-wrapper,.jw-preview,.vjs-player,.plyr,[class*="video-player"],[class*="player-container"],video')].filter(visible);
+  // Prefer the JW Player wrapper, not its <video> element, which has no Play children.
+  roots.sort(function(a,b){
+    function score(n){var c=String(n.className||'')+' '+n.id;
+      return (/jwplayer|jw-wrapper|vjs-player|plyr/.test(c)?10:0)+
+             (n.querySelector&&n.querySelector('.jw-display-icon-container,.jw-icon-display,.vjs-big-play-button')?5:0);
+    }
+    return score(b)-score(a);
+  });
+  var root=roots[0];
   if(!root)return 'player-not-ready';
-  var controls=[root,...root.querySelectorAll('button,a,[role="button"],[class*="play"],[aria-label],[title]')];
-  var button=controls.find(function(n){
-    if(!visible(n))return false;
-    var label=((n.getAttribute('aria-label')||'')+' '+(n.getAttribute('title')||'')+' '+String(n.className||'')).toLowerCase();
-    if(!/play|poster/.test(label))return false;
-    if(/advert|sponsor|unlock|banner|ad-/.test(label))return false;
-    return !n.closest('ins.adsbygoogle,[class*="advert"],[class*="unlock"]');
+  var selectors=[
+    '.jw-display-icon-container','.jw-icon-display','.jw-display-icon',
+    '.jw-icon-playback','.jw-preview','.jw-click',
+    '.vjs-big-play-button','.plyr__control--overlaid',
+    '.play-button','.play-btn','button[aria-label*="Play"]',
+    '[role="button"][aria-label*="Play"]','[class*="play-overlay"]'
+  ];
+  var options=[...root.querySelectorAll(selectors.join(','))].filter(visible);
+  var button=options.find(function(n){
+    var t=(String(n.className||'')+' '+(n.getAttribute('aria-label')||'')).toLowerCase();
+    return !/advert|sponsor|unlock|banner|ad-container|ad-wrapper/.test(t) &&
+      !n.closest('ins.adsbygoogle,[class*="advert"],[class*="unlock"]');
   });
   if(!button)return 'play-not-found';
-  window.__robinPosterPlayAttempted=true;
+  // Limit to one attempt per player DOM control; a newly rendered control
+  // may be tried again, but don't repeatedly click a playing video.
+  if(button.dataset.robinPlayAttempted==='yes')return 'already-tried';
+  var video=root.querySelector('video');
+  if(video&&!video.paused&&!video.ended)return 'playing';
+  button.dataset.robinPlayAttempted='yes';
   button.click();
   return 'poster-play-clicked';
 })();
@@ -1735,7 +1756,9 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
             if (atFinal && showWebContent) {
                 // Request the movie through the provider's own Play control,
                 // then capture the signed media request for native playback.
-                if (!accessPromptActive && nativeChoice == null) {
+                if (nativeChoice == null) {
+                    // Let the page itself check for a CURRENT access dialog.
+                    // The older Compose flag may remain true after access ends.
                     web.evaluateJavascript(startFinalPosterPlaybackScript, null)
                 }
                 web.evaluateJavascript(restorePlayerScrollScript, null)
