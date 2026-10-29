@@ -495,8 +495,12 @@ private const val followFinalPlayerScript = """
   if(blocks.some(function(el){
     return visible(el) && /unlock more content|view a short ad|watch.{0,35}to unlock/i.test((el.textContent||'').slice(0,1300));
   })) return 'unlock-required';
-  // A single click per loaded document. Page transitions reset this flag.
-  if(window.__robinAutoPreviewAttempted) return 'waiting-for-navigation';
+  // Retry a first-party Play click once if WebView did not navigate.
+  // Slower Android TV devices sometimes ignore a synthetic click. Never loop.
+  var attempts=window.__robinAutoPreviewAttempts||0;
+  if(attempts>=2) return 'navigation-stalled';
+  if(window.__robinAutoPreviewAttempted &&
+     Date.now()-(window.__robinAutoPreviewLastClick||0)<2500) return 'waiting-for-navigation';
   var blocked='[role=dialog],.modal,.popup,[class*=unlock],ins.adsbygoogle,.adsbygoogle,[class*=ad-banner]';
   function safe(el){return visible(el) && !el.closest(blocked);}
   function onSite(raw){
@@ -518,6 +522,8 @@ private const val followFinalPlayerScript = """
       return score(b)-score(a);
     });
     window.__robinAutoPreviewAttempted=true;
+    window.__robinAutoPreviewAttempts=attempts+1;
+    window.__robinAutoPreviewLastClick=Date.now();
     linksToPlayer[0].click();
     return quick?'opening-final-player':'opening-playback-page';
   }
@@ -554,6 +560,8 @@ private const val followFinalPlayerScript = """
   });
   if(candidates.length){
     window.__robinAutoPreviewAttempted=true;
+    window.__robinAutoPreviewAttempts=attempts+1;
+    window.__robinAutoPreviewLastClick=Date.now();
     candidates[0].click();
     return quick?'opening-final-from-preview':'opening-preview';
   }
@@ -1581,9 +1589,19 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                             if (atFinal) playerMessage = "Choose player or video quality"
                         }
                         if (!atFinal) web.evaluateJavascript(followFinalPlayerScript) { result ->
-                            if (result.removeSurrounding("\"") == "unlock-required") {
+                            val navigation = result.removeSurrounding("\"")
+                            if (navigation == "unlock-required") {
+                                // Do not cover a legitimate required-access dialog.
                                 showWebContent = true
                                 manualContinuation = false
+                                playerMessage = "FarsiPlex requires an access step"
+                            } else if (navigation == "navigation-stalled" ||
+                                navigation == "preview-needs-tap" ||
+                                navigation == "title-needs-tap") {
+                                // The provider must receive a genuine tap/OK;
+                                // keep the page accessible instead of spinning forever.
+                                showWebContent = true
+                                playerMessage = "Use the provider's Play control to continue"
                             }
                         }
                     }
