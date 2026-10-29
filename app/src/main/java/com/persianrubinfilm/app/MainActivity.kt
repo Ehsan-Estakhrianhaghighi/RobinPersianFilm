@@ -1297,6 +1297,31 @@ private suspend fun probeAuthorizedQualityVariants(source: NativeVideoSource): L
 /** Only discover media URLs already exposed to the user's authorized browser page.
  * No token generation, ad-unlock circumvention or cross-origin iframe inspection.
  * Native playback is optional because some hosts require their embedded player. */
+private suspend fun verifyPublishedMediaUrl(rawUrl: String): Boolean = withContext(Dispatchers.IO) {
+    val uri = try { URI(rawUrl) } catch (_: Exception) { return@withContext false }
+    val host = uri.host?.lowercase().orEmpty()
+    if (uri.scheme != "https" || !(host == "farsiplex.buzz" || host.endsWith(".farsiplex.buzz")))
+        return@withContext false
+    if (!Regex("""\\.(mp4|m3u8|mpd)$""", RegexOption.IGNORE_CASE).containsMatchIn(uri.path.orEmpty()))
+        return@withContext false
+    val conn = try {
+        (URL(rawUrl).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            setRequestProperty("Range", "bytes=0-0")
+            connectTimeout = 3500
+            readTimeout = 3500
+            instanceFollowRedirects = false
+        }
+    } catch (_: Exception) { return@withContext false }
+    try {
+        val type = conn.contentType.orEmpty().lowercase()
+        conn.responseCode in 200..206 &&
+            (type.startsWith("video/") || type.startsWith("application/vnd.apple.mpegurl") ||
+             type.startsWith("application/x-mpegurl") || type.startsWith("application/dash+xml") ||
+             type.startsWith("application/octet-stream"))
+    } catch (_: Exception) { false } finally { conn.disconnect() }
+}
+
 private const val discoverNativeVideoScript = """
 (function(){
   if(location.pathname.indexOf('/play-hq-player')!==0)return '[]';
@@ -1456,10 +1481,23 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
         if (nativeSources.none { it.url == rawUrl }) {
             nativeSources = (nativeSources + source).takeLast(24)
         }
-        if (wasRequested && (nativeChoice == null || pendingSourceChange) && !accessPromptActive) {
+        if (wasRequested && (nativeChoice == null || pendingSourceChange)) {
+            // Actual requested video is reliable even if the old ad flag remains set.
+            accessPromptActive = false
             pendingSourceChange = false
             nativeChoice = nativeSources.firstOrNull { it.url == rawUrl } ?: source
             playerMessage = "Playing ${quality}p natively"
+        }
+    }
+    // The final page can expose a signed source before requesting it.
+    // Validate that exact published URL, then use the same native player.
+    val discoveredCandidate = nativeSources.firstOrNull()?.url
+    LaunchedEffect(discoveredCandidate, nativeChoice) {
+        if (nativeChoice == null && discoveredCandidate != null &&
+            verifyPublishedMediaUrl(discoveredCandidate)) {
+            nativeChoice = nativeSources.firstOrNull { it.url == discoveredCandidate }
+            accessPromptActive = false
+            playerMessage = "Playing video in RobinPersianFilm"
         }
     }
     // Recheck only when a different primary signed stream is observed.
