@@ -1302,7 +1302,7 @@ private suspend fun verifyPublishedMediaUrl(rawUrl: String): Boolean = withConte
     val host = uri.host?.lowercase().orEmpty()
     if (uri.scheme != "https" || !(host == "farsiplex.buzz" || host.endsWith(".farsiplex.buzz")))
         return@withContext false
-    if (!Regex("""\\.(mp4|m3u8|mpd)$""", RegexOption.IGNORE_CASE).containsMatchIn(uri.path.orEmpty()))
+    if (!Regex("""\.(mp4|m3u8|mpd)$""", RegexOption.IGNORE_CASE).containsMatchIn(uri.path.orEmpty()))
         return@withContext false
     val conn = try {
         (URL(rawUrl).openConnection() as HttpURLConnection).apply {
@@ -1327,7 +1327,7 @@ private suspend fun verifyPublishedMediaUrl(rawUrl: String): Boolean = withConte
  * loaded player document. After the click, WebView observes the real media URL. */
 private const val startFinalPosterPlaybackScript = """
 (function(){
-  if(!/\\/play-hq-player\\/?/.test(location.pathname))return 'not-final';
+  if(!/\/play-hq-player\/?/.test(location.pathname))return 'not-final';
   if(window.__robinPosterPlayAttempted)return 'already-tried';
   function visible(n){if(!n||!n.getBoundingClientRect)return false;
     var r=n.getBoundingClientRect(),s=getComputedStyle(n);
