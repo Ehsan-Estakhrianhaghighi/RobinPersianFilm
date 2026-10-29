@@ -1322,6 +1322,38 @@ private suspend fun verifyPublishedMediaUrl(rawUrl: String): Boolean = withConte
     } catch (_: Exception) { false } finally { conn.disconnect() }
 }
 
+/** Activate only the visible final-player poster's actual Play control.
+ * Never interact with ads or provider access dialogs; at most one click per
+ * loaded player document. After the click, WebView observes the real media URL. */
+private const val startFinalPosterPlaybackScript = """
+(function(){
+  if(!/\\/play-hq-player\\/?/.test(location.pathname))return 'not-final';
+  if(window.__robinPosterPlayAttempted)return 'already-tried';
+  function visible(n){if(!n||!n.getBoundingClientRect)return false;
+    var r=n.getBoundingClientRect(),s=getComputedStyle(n);
+    return r.width>12&&r.height>12&&s.display!=='none'&&s.visibility!=='hidden';}
+  var dialogs=[...document.querySelectorAll('[role="dialog"],[aria-modal="true"],.modal,.popup,[class*="unlock"]')];
+  if(dialogs.some(function(n){var t=(n.textContent||'').toLowerCase();
+    return visible(n)&&t.includes('unlock more content')&&t.includes('view a short ad');
+  }))return 'access-required';
+  var root=[...document.querySelectorAll('video,[class*="jwplayer"],[id*="jwplayer"],[class*="player-container"],[class*="video-player"]')]
+    .find(visible);
+  if(!root)return 'player-not-ready';
+  var controls=[root,...root.querySelectorAll('button,a,[role="button"],[class*="play"],[aria-label],[title]')];
+  var button=controls.find(function(n){
+    if(!visible(n))return false;
+    var label=((n.getAttribute('aria-label')||'')+' '+(n.getAttribute('title')||'')+' '+String(n.className||'')).toLowerCase();
+    if(!/play|poster/.test(label))return false;
+    if(/advert|sponsor|unlock|banner|ad-/.test(label))return false;
+    return !n.closest('ins.adsbygoogle,[class*="advert"],[class*="unlock"]');
+  });
+  if(!button)return 'play-not-found';
+  window.__robinPosterPlayAttempted=true;
+  button.click();
+  return 'poster-play-clicked';
+})();
+"""
+
 private const val discoverNativeVideoScript = """
 (function(){
   if(location.pathname.indexOf('/play-hq-player')!==0)return '[]';
@@ -1701,6 +1733,11 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                 manualContinuation = false
             }
             if (atFinal && showWebContent) {
+                // Request the movie through the provider's own Play control,
+                // then capture the signed media request for native playback.
+                if (!accessPromptActive && nativeChoice == null) {
+                    web.evaluateJavascript(startFinalPosterPlaybackScript, null)
+                }
                 web.evaluateJavascript(restorePlayerScrollScript, null)
                 web.evaluateJavascript(reduceFinalAdSpaceScript, null)
                 web.evaluateJavascript(isolateFinalPlayerScript, null)
