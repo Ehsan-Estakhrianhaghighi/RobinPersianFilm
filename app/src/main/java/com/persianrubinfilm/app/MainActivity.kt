@@ -1325,6 +1325,9 @@ private suspend fun verifyPublishedMediaUrl(rawUrl: String): Boolean = withConte
 /** Activate only the visible final-player poster's actual Play control.
  * Never interact with ads or provider access dialogs; at most one click per
  * loaded player document. After the click, WebView observes the real media URL. */
+/** Start the selected title through its own HTML5/JW Player, never an advert.
+ * WebView is configured to allow media playback without another gesture.
+ * Retry only if the player remains paused and no required-access dialog exists. */
 private const val startFinalPosterPlaybackScript = """
 (function(){
   if(location.pathname.indexOf('/play-hq-player')!==0)return 'not-final';
@@ -1333,58 +1336,64 @@ private const val startFinalPosterPlaybackScript = """
     var r=n.getBoundingClientRect(),style=getComputedStyle(n);
     return r.width>12&&r.height>12&&style.display!=='none'&&style.visibility!=='hidden';
   }
-  // A genuine required-access prompt takes priority. Never click through it.
   var dialogs=[...document.querySelectorAll('[role="dialog"],[aria-modal="true"],.modal,.popup,[class*="unlock"]')];
   if(dialogs.some(function(n){
     var t=(n.innerText||n.textContent||'').toLowerCase();
     return visible(n)&&t.includes('unlock more content')&&t.includes('view a short ad');
   }))return 'access-required';
-  var roots=[...document.querySelectorAll('.jwplayer,[id^="jwplayer"],.jw-wrapper,.jw-preview,.vjs-player,.plyr,[class*="video-player"],[class*="player-container"],video')].filter(visible);
-  // Prefer the JW Player wrapper, not its <video> element, which has no Play children.
+  var roots=[...document.querySelectorAll('.jwplayer,[id^="jwplayer"],.jw-wrapper,.vjs-player,.plyr,[class*="video-player"],[class*="player-container"],video')].filter(visible);
   roots.sort(function(a,b){
     function score(n){var c=String(n.className||'')+' '+n.id;
       return (/jwplayer|jw-wrapper|vjs-player|plyr/.test(c)?10:0)+
-             (n.querySelector&&n.querySelector('.jw-display-icon-container,.jw-icon-display,.vjs-big-play-button')?5:0);
+        (n.querySelector&&n.querySelector('.jw-display-icon-container,.jw-icon-display,.vjs-big-play-button')?5:0);
     }
     return score(b)-score(a);
   });
   var root=roots[0];
   if(!root)return 'player-not-ready';
-  var selectors=[
-    '.jw-display-icon-container','.jw-icon-display','.jw-display-icon',
-    '.jw-icon-playback','.jw-preview','.jw-click',
-    '.vjs-big-play-button','.plyr__control--overlaid',
-    '.play-button','.play-btn','button[aria-label*="Play"]',
-    '[role="button"][aria-label*="Play"]','[class*="play-overlay"]'
-  ];
-  var options=[...root.querySelectorAll(selectors.join(','))].filter(visible);
-  var button=options.find(function(n){
-    var t=(String(n.className||'')+' '+(n.getAttribute('aria-label')||'')).toLowerCase();
-    return !/advert|sponsor|unlock|banner|ad-container|ad-wrapper/.test(t) &&
-      !n.closest('ins.adsbygoogle,[class*="advert"],[class*="unlock"]');
-  });
-  if(!button){
-    // JW Player's public play() control can activate a ready poster even when
-    // the clickable overlay is implemented as a canvas or nested SVG.
-    try{
-      if(typeof window.jwplayer==='function'){
-        var jw=window.jwplayer();
-        if(jw&&typeof jw.play==='function'){
-          if(window.__robinJwPlayAttempted)return 'already-tried';
-          window.__robinJwPlayAttempted=true;
+  var video=root.tagName==='VIDEO'?root:root.querySelector('video');
+  if(video&&!video.paused&&!video.ended)return 'already-playing';
+  var now=Date.now(),last=window.__robinPosterLastTry||0;
+  var count=window.__robinPosterTryCount||0;
+  if(count>=5)return 'max-tries';
+  if(now-last<3500)return 'waiting-for-playback';
+  window.__robinPosterLastTry=now;
+  window.__robinPosterTryCount=count+1;
+  // Use the actual player API first, not a synthetic click on an ad overlay.
+  try{
+    if(typeof window.jwplayer==='function'){
+      var jw=window.jwplayer(root.id||undefined);
+      if(!jw||typeof jw.play!=='function')jw=window.jwplayer();
+      if(jw&&typeof jw.play==='function'){
+        var state=jw.getState&&jw.getState();
+        if(state==='playing')return 'already-playing';
+        if(state==='idle'||state==='paused'||state==='buffering'||!state){
           jw.play(true);
           return 'jw-play-requested';
         }
       }
+    }
+  }catch(e){}
+  if(video&&video.paused){
+    try{
+      var request=video.play();
+      if(request&&typeof request.catch==='function')request.catch(function(){});
+      return 'html5-play-requested';
     }catch(e){}
-    return 'play-not-found';
   }
-  // Limit to one attempt per player DOM control; a newly rendered control
-  // may be tried again, but don't repeatedly click a playing video.
-  if(button.dataset.robinPlayAttempted==='yes')return 'already-tried';
-  var video=root.querySelector('video');
-  if(video&&!video.paused&&!video.ended)return 'playing';
-  button.dataset.robinPlayAttempted='yes';
+  var selectors=[
+    '.jw-display-icon-container','.jw-icon-display','.jw-icon-playback',
+    '.vjs-big-play-button','.plyr__control--overlaid',
+    '.play-button','.play-btn','button[aria-label*="Play"]',
+    '[role="button"][aria-label*="Play"]','[class*="play-overlay"]'
+  ];
+  var buttons=[...root.querySelectorAll(selectors.join(','))].filter(visible);
+  var button=buttons.find(function(n){
+    var t=(String(n.className||'')+' '+(n.getAttribute('aria-label')||'')).toLowerCase();
+    return !/advert|sponsor|unlock|banner|ad-container|ad-wrapper/.test(t) &&
+      !n.closest('ins.adsbygoogle,[class*="advert"],[class*="unlock"]');
+  });
+  if(!button)return 'play-not-found';
   button.click();
   return 'poster-play-clicked';
 })();
