@@ -80,6 +80,12 @@ private val panel = Color(0xFF24242D)
 private val accent = Color(0xFFE63B45)
 private const val site = "https://farsiplex.com"
 
+// FarsiPlex streams are served from both CDN domains, e.g. pl.farsiland.buzz.
+// Keep the exact signed URL issued for this title; never fabricate its token.
+private fun isSupportedMediaHost(host: String): Boolean =
+    host == "farsiplex.buzz" || host.endsWith(".farsiplex.buzz") ||
+    host == "farsiland.buzz" || host.endsWith(".farsiland.buzz")
+
 /** Highlight the currently focused native Media3 control, including its seek bar
  * and settings buttons, without substituting custom controls for Media3's.
  */
@@ -1259,7 +1265,7 @@ private suspend fun probeAuthorizedQualityVariants(source: NativeVideoSource): L
     withContext(Dispatchers.IO) {
         val uri = try { URI(source.url) } catch (_: Exception) { return@withContext emptyList() }
         val host = uri.host?.lowercase().orEmpty()
-        if (uri.scheme != "https" || !(host == "farsiplex.buzz" || host.endsWith(".farsiplex.buzz")))
+        if (uri.scheme != "https" || !isSupportedMediaHost(host))
             return@withContext emptyList()
         // Some FarsiPlex titles use 01.480.mp4; others use antik-480.mp4.
         // Preserve the original delimiter and signed query string.
@@ -1300,7 +1306,7 @@ private suspend fun probeAuthorizedQualityVariants(source: NativeVideoSource): L
 private suspend fun verifyPublishedMediaUrl(rawUrl: String): Boolean = withContext(Dispatchers.IO) {
     val uri = try { URI(rawUrl) } catch (_: Exception) { return@withContext false }
     val host = uri.host?.lowercase().orEmpty()
-    if (uri.scheme != "https" || !(host == "farsiplex.buzz" || host.endsWith(".farsiplex.buzz")))
+    if (uri.scheme != "https" || !isSupportedMediaHost(host))
         return@withContext false
     if (!Regex("""\.(mp4|m3u8|mpd)$""", RegexOption.IGNORE_CASE).containsMatchIn(uri.path.orEmpty()))
         return@withContext false
@@ -1441,7 +1447,7 @@ private const val discoverNativeVideoScript = """
     try{
       var u=new URL(url,node&&node.ownerDocument?node.ownerDocument.baseURI:location.href);
       if(u.protocol!=='https:'||seen[u.href])return;
-      if(!/(^|\.)farsiplex\.buzz$/i.test(u.hostname))return;
+      if(!/(^|\.)(?:farsiplex|farsiland)\.buzz$/i.test(u.hostname))return;
       seen[u.href]=true;
       var match=u.pathname.match(/(?:360|480|720|1080|1440|2160)(?=\D|$)/);
       found.push({label:'Video source '+(found.length+1),url:u.href,quality:match?match[0]:'Auto'});
@@ -1587,7 +1593,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
         val host = uri.host?.lowercase().orEmpty()
         val path = uri.path.orEmpty()
         if (uri.scheme != "https" ||
-            !(host == "farsiplex.buzz" || host.endsWith(".farsiplex.buzz")) ||
+            !isSupportedMediaHost(host) ||
             !Regex("\\.(mp4|m3u8|mpd)$", RegexOption.IGNORE_CASE).containsMatchIn(path)
         ) return
         val quality = Regex("(360|480|720|1080|1440|2160)(?=\\D|$)").find(path)?.value ?: "Auto"
