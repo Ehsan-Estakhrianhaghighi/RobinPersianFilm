@@ -1363,7 +1363,22 @@ private const val startFinalPosterPlaybackScript = """
     return !/advert|sponsor|unlock|banner|ad-container|ad-wrapper/.test(t) &&
       !n.closest('ins.adsbygoogle,[class*="advert"],[class*="unlock"]');
   });
-  if(!button)return 'play-not-found';
+  if(!button){
+    // JW Player's public play() control can activate a ready poster even when
+    // the clickable overlay is implemented as a canvas or nested SVG.
+    try{
+      if(typeof window.jwplayer==='function'){
+        var jw=window.jwplayer();
+        if(jw&&typeof jw.play==='function'){
+          if(window.__robinJwPlayAttempted)return 'already-tried';
+          window.__robinJwPlayAttempted=true;
+          jw.play(true);
+          return 'jw-play-requested';
+        }
+      }
+    }catch(e){}
+    return 'play-not-found';
+  }
   // Limit to one attempt per player DOM control; a newly rendered control
   // may be tried again, but don't repeatedly click a playing video.
   if(button.dataset.robinPlayAttempted==='yes')return 'already-tried';
@@ -1408,6 +1423,25 @@ private const val discoverNativeVideoScript = """
     register(n.currentSrc||n.getAttribute('src')||n.getAttribute('href'),n);
     if(n.tagName==='VIDEO')register(n.getAttribute('src'),n);
   });
+  // JW Player may have the video URL in its playlist before requesting it.
+  // Read its exposed configuration, without guessing a filename or token.
+  if(typeof window.jwplayer==='function'){
+    try{
+      var player=window.jwplayer();
+      var item=player&&player.getPlaylistItem&&player.getPlaylistItem();
+      if(item){
+        register(item.file,document.body);
+        (item.sources||[]).forEach(function(source){register(source.file,document.body);});
+      }
+    }catch(e){}
+  }
+  // Capture authorized requests even if the provider creates a detached
+  // <video> node or dynamically replaces the JW Player source element.
+  try{
+    performance.getEntriesByType('resource').forEach(function(entry){
+      if(entry&&entry.name)register(entry.name,document.body);
+    });
+  }catch(e){}
   return JSON.stringify(found.slice(0,24));
 })();
 """
@@ -1573,7 +1607,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
         WebView(context).apply {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
-            settings.mediaPlaybackRequiresUserGesture = true
+            settings.mediaPlaybackRequiresUserGesture = false
             // Request the same desktop FarsiPlex layout seen in Chrome on a laptop.
             // Apply before the first load; keep JavaScript, cookies and normal
             // authorized source discovery untouched.
