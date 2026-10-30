@@ -1434,16 +1434,16 @@ private const val discoverNativeVideoScript = """
     });
   }
   var found=[],seen={};
-  var media=/\\.(mp4|m3u8|mpd)(?:[?#]|$)/i;
+  var media=/\.(mp4|m3u8|mpd)(?:[?#]|$)/i;
   function register(url,node){
     if(!url||typeof url!=='string'||!media.test(url))return;
     if(node&&node.closest&&node.closest('ins.adsbygoogle,[class*="advert"],[class*="banner"]'))return;
     try{
       var u=new URL(url,node&&node.ownerDocument?node.ownerDocument.baseURI:location.href);
       if(u.protocol!=='https:'||seen[u.href])return;
-      if(!/(^|\\.)farsiplex\\.buzz$/i.test(u.hostname))return;
+      if(!/(^|\.)farsiplex\.buzz$/i.test(u.hostname))return;
       seen[u.href]=true;
-      var match=u.pathname.match(/(?:360|480|720|1080|1440|2160)(?=\\D|$)/);
+      var match=u.pathname.match(/(?:360|480|720|1080|1440|2160)(?=\D|$)/);
       found.push({label:'Video source '+(found.length+1),url:u.href,quality:match?match[0]:'Auto'});
     }catch(e){}
   }
