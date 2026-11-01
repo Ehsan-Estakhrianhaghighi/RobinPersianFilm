@@ -1380,12 +1380,12 @@ private suspend fun resolveFarsiLandSignedStream(episodeUrl: String): NativeVide
             fun action(form: org.jsoup.nodes.Element, doc: Document): String =
                 form.absUrl("action").ifBlank { doc.location() }
 
-            val episode = fetch(episodeUrl)
+            val selectedPage = fetch(episodeUrl)
             // The real episode contains a watch form whose action points to redirect.php.
-            val watch = episode.select("form[action]").firstOrNull {
+            val watch = selectedPage.select("form[action]").firstOrNull {
                 it.absUrl("action").contains("farsiland.buzz/redirect.php")
             } ?: return@withContext null
-            val redirect = fetch(action(watch, episode), formInputs(watch))
+            val redirect = fetch(action(watch, selectedPage), formInputs(watch))
             val jump = redirect.select("form[action]").firstOrNull {
                 val host = runCatching { URI(it.absUrl("action")).host }.getOrNull().orEmpty()
                 host == "farsiland.buzz" || host == "www.farsiland.buzz"
@@ -1817,7 +1817,10 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     // Resolve the selected FarsiLand episode through its documented POST
     // chain. This does not depend on a changing /movies/ slug or a Play tap.
     LaunchedEffect(url) {
-        if (isFarsiLandPage(url) && URI(url).path.orEmpty().startsWith("/episodes/")) {
+        if (isFarsiLandPage(url) && (
+            URI(url).path.orEmpty().startsWith("/episodes/") ||
+            URI(url).path.orEmpty().startsWith("/movies/")
+        )) {
             playerMessage = "Resolving FarsiLand stream…"
             val source = resolveFarsiLandSignedStream(url)
             if (source != null) {
