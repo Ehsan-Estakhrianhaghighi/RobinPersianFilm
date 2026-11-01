@@ -1395,45 +1395,83 @@ private const val advanceFarsiLandPlaybackScript = """
   var serial=host.indexOf('filmserial.')>=0;
   if(!land&&!serial)return 'other-site';
   var now=Date.now();
-  if(window.__robinLandStepDone)return 'waiting';
-  if(now-(window.__robinLastLandClick||0)<2500)return 'waiting';
+  if(now-(window.__robinLastLandClick||0)<1800)return 'waiting';
   function visible(el){
-    if(!el)return false;
+    if(!el||!el.getBoundingClientRect)return false;
     var r=el.getBoundingClientRect(),s=getComputedStyle(el);
-    return r.width>12&&r.height>12&&s.visibility!=='hidden'&&s.display!=='none';
+    return r.width>8&&r.height>8&&s.visibility!=='hidden'&&s.display!=='none';
   }
   function safe(el){
-    if(!visible(el)||el.closest('ins.adsbygoogle,[class*="advert"],[class*="banner"],[class*="unlock"]'))return false;
+    if(!visible(el)||el.closest('header,nav,footer,ins.adsbygoogle,[class*="advert"],[class*="banner"],[class*="unlock"]'))return false;
     var t=(el.innerText||el.textContent||'').toLowerCase();
     return !/sign up|subscribe|open ad|advertis|unlock content/.test(t);
   }
-  var controls=[...document.querySelectorAll('a[href],button,[role="button"]')].filter(safe);
+  function activate(el,reason){
+    if(!el||!safe(el))return null;
+    // Do not repeatedly navigate from stale elements during slow page loads.
+    window.__robinLastLandClick=Date.now();
+    el.click();
+    return reason;
+  }
   if(serial){
-    var choices=controls.filter(function(el){
-      return /(^|[^0-9])(480|720|1080)(p)?([^0-9]|$)/.test((el.textContent||'').trim()) &&
+    var choices=[...document.querySelectorAll('a,button,[role="button"]')].filter(function(el){
+      return safe(el)&&/(^|[^0-9])(480|720|1080)(p)?([^0-9]|$)/.test((el.textContent||'').trim()) &&
         (el.closest('main,[class*="quality"],[class*="player"],[class*="video"]')||el.tagName==='A');
     });
     choices.sort(function(a,b){
       function rank(n){var t=n.textContent||'';return /720/.test(t)?3:/1080/.test(t)?2:1;}
       return rank(b)-rank(a);
     });
-    if(choices.length){
-      window.__robinLastLandClick=now;
-      window.__robinLandStepDone=true;
-      choices[0].click();
-      return 'quality-selected';
-    }
+    if(choices.length)return activate(choices[0],'quality-selected');
+    return 'waiting-for-quality';
   }
-  if(land){
-    var player=document.querySelector('.jwplayer,video,[class*="player"],[class*="video"]');
-    if(!player)return 'waiting-player';
-    var poster=[...player.querySelectorAll('a,button,[role="button"],[class*="play"]')].find(function(el){
-      var c=(String(el.className||'')+' '+(el.getAttribute('aria-label')||'')).toLowerCase();
-      return visible(el)&&/play|watch|poster/.test(c)&&safe(el);
-    });
-    if(poster){window.__robinLastLandClick=now;window.__robinLandStepDone=true;poster.click();return 'opening-quality-selection';}
+  // The episode landing page has a large poster with a play circle, before the
+  // provider's actual video player exists. The old implementation waited for
+  // ".jwplayer, video, [class*=player]" and missed this initial Play button.
+  var media=document.querySelector('video');
+  if(media&&media.currentSrc&&!media.paused)return 'playing';
+  var candidate=null,best=-1;
+  var nodes=[...document.querySelectorAll(
+    '.play, .play-button, .playbtn, .play-icon, .btn-play, .icon-play, .fa-play, '+
+    '[class*="play-icon"],[class*="play-button"],[class*="playbtn"],'+
+    '[aria-label*="play" i],[title*="play" i],'+
+    '.poster a, .player a, .video a, .sheader a, a[href*="filmserial"],'+
+    'video, .jw-display-icon-container, .jw-icon-display'
+  )];
+  nodes.forEach(function(node){
+    var el=node.closest('a[href],button,[role="button"]')||node;
+    if(!safe(el))return;
+    var r=el.getBoundingClientRect();
+    var poster=el.closest('.poster,.player,.video,.sheader,.wp-post-image,.episode,.content,article,main');
+    var cls=(String(node.className||'')+' '+String(el.className||'')+' '+
+      (el.getAttribute('aria-label')||'')+' '+(el.getAttribute('title')||'')).toLowerCase();
+    var isPlay=/play|watch|poster|filmserial/.test(cls);
+    var img=el.querySelector('img')||el.closest('figure')?.querySelector('img');
+    if(!isPlay&&!poster&&!img)return;
+    var score=(isPlay?120:0)+(poster?35:0)+(img?15:0)+
+      (r.width>90?10:0)+(r.height>55?10:0);
+    if(el.tagName==='A'&&/filmserial/i.test(el.href||''))score+=70;
+    if(el.tagName==='VIDEO')score-=90;
+    if(score>best){candidate=el;best=score;}
+  });
+  if(candidate&&best>=35)return activate(candidate,'episode-poster-clicked');
+  // Theme-specific poster overlays often have no "play" class: hit-test the
+  // centre of the largest visible poster image, then click its real link/control.
+  var images=[...document.querySelectorAll('main img,article img,.poster img,.sheader img')];
+  images.sort(function(a,b){
+    var x=a.getBoundingClientRect(),y=b.getBoundingClientRect();
+    return y.width*y.height-x.width*x.height;
+  });
+  for(var i=0;i<images.length;i++){
+    var image=images[i],r=image.getBoundingClientRect();
+    if(!visible(image)||r.width<190||r.height<100)continue;
+    var center=document.elementFromPoint(Math.max(0,Math.min(innerWidth-1,r.left+r.width/2)),
+                                         Math.max(0,Math.min(innerHeight-1,r.top+r.height/2)));
+    var target=(center&&center.closest('a[href],button,[role="button"]'))||
+               image.closest('a[href],button,[role="button"]');
+    if(target&&safe(target))return activate(target,'poster-overlay-clicked');
   }
-  return 'waiting-for-provider';
+  return 'waiting-for-poster';
 })();
 """
 
