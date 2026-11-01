@@ -1195,7 +1195,7 @@ private const val scrollToVideoSourcesScript = """
  * class names. Re-run after dynamic insertions, without removing media nodes. */
 private const val isolateFinalPlayerScript = """
 (function(){
-  if(location.pathname.indexOf('/play-hq-player')!==0 && !(location.hostname.endsWith('farsiland.com') && /^\/(episodes|movies)\//.test(location.pathname)) && location.hostname.indexOf('filmserial.')<0)return 'other-page';
+  if(location.pathname.indexOf('/play-hq-player')!==0 && !(location.hostname.endsWith('farsiland.com') && /^\/(episodes|movies)\//.test(location.pathname)) && location.hostname.indexOf('filmserial.')<0 && !['farsiland.buzz','www.farsiland.buzz'].includes(location.hostname))return 'other-page';
   function visible(el){
     if(!el||!el.getBoundingClientRect)return false;
     var r=el.getBoundingClientRect(),cs=getComputedStyle(el);
@@ -1471,7 +1471,7 @@ private const val advanceFarsiLandPlaybackScript = """
 
 private const val startFinalPosterPlaybackScript = """
 (function(){
-  if(location.pathname.indexOf('/play-hq-player')!==0 && !(location.hostname.endsWith('farsiland.com') && /^\/(episodes|movies)\//.test(location.pathname)) && location.hostname.indexOf('filmserial.')<0)return 'not-final';
+  if(location.pathname.indexOf('/play-hq-player')!==0 && !(location.hostname.endsWith('farsiland.com') && /^\/(episodes|movies)\//.test(location.pathname)) && location.hostname.indexOf('filmserial.')<0 && !['farsiland.buzz','www.farsiland.buzz'].includes(location.hostname))return 'not-final';
   function visible(n){
     if(!n||!n.getBoundingClientRect)return false;
     var r=n.getBoundingClientRect(),style=getComputedStyle(n);
@@ -1562,7 +1562,7 @@ private const val startFinalPosterPlaybackScript = """
 
 private const val discoverNativeVideoScript = """
 (function(){
-  if(location.pathname.indexOf('/play-hq-player')!==0 && !(location.hostname.endsWith('farsiland.com') && /^\/(episodes|movies)\//.test(location.pathname)) && location.hostname.indexOf('filmserial.')<0)return '[]';
+  if(location.pathname.indexOf('/play-hq-player')!==0 && !(location.hostname.endsWith('farsiland.com') && /^\/(episodes|movies)\//.test(location.pathname)) && location.hostname.indexOf('filmserial.')<0 && !['farsiland.buzz','www.farsiland.buzz'].includes(location.hostname))return '[]';
   var docs=[document];
   for(var depth=0;depth<2;depth++){
     docs.slice().forEach(function(doc){
