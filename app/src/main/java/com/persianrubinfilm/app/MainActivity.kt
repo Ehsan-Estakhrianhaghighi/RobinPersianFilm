@@ -1425,52 +1425,38 @@ private const val advanceFarsiLandPlaybackScript = """
     if(choices.length)return activate(choices[0],'quality-selected');
     return 'waiting-for-quality';
   }
-  // The episode landing page has a large poster with a play circle, before the
-  // provider's actual video player exists. The old implementation waited for
-  // ".jwplayer, video, [class*=player]" and missed this initial Play button.
-  var media=document.querySelector('video');
-  if(media&&media.currentSrc&&!media.paused)return 'playing';
-  var candidate=null,best=-1;
-  var nodes=[...document.querySelectorAll(
-    '.play, .play-button, .playbtn, .play-icon, .btn-play, .icon-play, .fa-play, '+
+  // FarsiLand's episode artwork is a clickable poster, not a video.
+  // Prefer its actual linked wrapper before theme-specific play-icon classes.
+  var video=document.querySelector('video');
+  if(video&&video.currentSrc&&!video.paused)return 'playing';
+  var posters=[...document.querySelectorAll('article img,.post img,.entry-content img,.poster img,.sheader img,main img,[class*="player"] img')];
+  var clickable=[];
+  posters.forEach(function(img){
+    if(!visible(img))return;
+    var box=img.getBoundingClientRect();
+    if(box.width<160||box.height<90)return;
+    var linked=img.closest('a[href],button,[role="button"],[onclick],[data-href],[data-url]');
+    var center=document.elementFromPoint(
+      Math.max(0,Math.min(innerWidth-1,box.left+box.width/2)),
+      Math.max(0,Math.min(innerHeight-1,box.top+box.height/2)));
+    var overlay=center&&center.closest('a[href],button,[role="button"],[onclick],[data-href],[data-url]');
+    var target=(overlay&&safe(overlay)?overlay:linked&&safe(linked)?linked:null);
+    if(target)clickable.push({node:target,area:box.width*box.height});
+  });
+  clickable.sort(function(a,b){return b.area-a.area;});
+  if(clickable.length)return activate(clickable[0].node,'episode-poster-clicked');
+  // Some FarsiLand themes put the play icon in a separate absolute overlay,
+  // with no ancestor link on the actual image.
+  var selectors='.play,.play-button,.playbtn,.play-icon,.btn-play,.icon-play,.fa-play,'+
     '[class*="play-icon"],[class*="play-button"],[class*="playbtn"],'+
     '[aria-label*="play" i],[title*="play" i],'+
-    '.poster a, .player a, .video a, .sheader a, a[href*="filmserial"],'+
-    'video, .jw-display-icon-container, .jw-icon-display'
-  )];
-  nodes.forEach(function(node){
-    var el=node.closest('a[href],button,[role="button"]')||node;
-    if(!safe(el))return;
-    var r=el.getBoundingClientRect();
-    var poster=el.closest('.poster,.player,.video,.sheader,.wp-post-image,.episode,.content,article,main');
-    var cls=(String(node.className||'')+' '+String(el.className||'')+' '+
-      (el.getAttribute('aria-label')||'')+' '+(el.getAttribute('title')||'')).toLowerCase();
-    var isPlay=/play|watch|poster|filmserial/.test(cls);
-    var img=el.querySelector('img')||el.closest('figure')?.querySelector('img');
-    if(!isPlay&&!poster&&!img)return;
-    var score=(isPlay?120:0)+(poster?35:0)+(img?15:0)+
-      (r.width>90?10:0)+(r.height>55?10:0);
-    if(el.tagName==='A'&&/filmserial/i.test(el.href||''))score+=70;
-    if(el.tagName==='VIDEO')score-=90;
-    if(score>best){candidate=el;best=score;}
-  });
-  if(candidate&&best>=35)return activate(candidate,'episode-poster-clicked');
-  // Theme-specific poster overlays often have no "play" class: hit-test the
-  // centre of the largest visible poster image, then click its real link/control.
-  var images=[...document.querySelectorAll('main img,article img,.poster img,.sheader img')];
-  images.sort(function(a,b){
+    '.jw-display-icon-container,.jw-icon-display';
+  var nodes=[...document.querySelectorAll(selectors)].filter(safe);
+  nodes.sort(function(a,b){
     var x=a.getBoundingClientRect(),y=b.getBoundingClientRect();
     return y.width*y.height-x.width*x.height;
   });
-  for(var i=0;i<images.length;i++){
-    var image=images[i],r=image.getBoundingClientRect();
-    if(!visible(image)||r.width<190||r.height<100)continue;
-    var center=document.elementFromPoint(Math.max(0,Math.min(innerWidth-1,r.left+r.width/2)),
-                                         Math.max(0,Math.min(innerHeight-1,r.top+r.height/2)));
-    var target=(center&&center.closest('a[href],button,[role="button"]'))||
-               image.closest('a[href],button,[role="button"]');
-    if(target&&safe(target))return activate(target,'poster-overlay-clicked');
-  }
+  if(nodes.length)return activate(nodes[0].closest('a[href],button,[role="button"]')||nodes[0],'episode-overlay-clicked');
   return 'waiting-for-poster';
 })();
 """
