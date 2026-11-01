@@ -1357,9 +1357,9 @@ private suspend fun probeAuthorizedQualityVariants(source: NativeVideoSource): L
  * Native playback is optional because some hosts require their embedded player. */
 /** Follow FarsiLand's actual HTML POST forms; URLs and post IDs always
  * originate from the selected episode. Never reuse a saved signed link. */
-private suspend fun resolveFarsiLandSignedStream(episodeUrl: String): NativeVideoSource? =
+private suspend fun resolveFarsiLandSignedStreams(episodeUrl: String): List<NativeVideoSource> =
     withContext(Dispatchers.IO) {
-        if (!isFarsiLandPage(episodeUrl)) return@withContext null
+        if (!isFarsiLandPage(episodeUrl)) return@withContext emptyList()
         try {
             val cookies = mutableMapOf<String, String>()
             fun fetch(url: String, values: Map<String, String>? = null): Document {
@@ -1384,12 +1384,12 @@ private suspend fun resolveFarsiLandSignedStream(episodeUrl: String): NativeVide
             // The real episode contains a watch form whose action points to redirect.php.
             val watch = selectedPage.select("form[action]").firstOrNull {
                 it.absUrl("action").contains("farsiland.buzz/redirect.php")
-            } ?: return@withContext null
+            } ?: return@withContext emptyList()
             val redirect = fetch(action(watch, selectedPage), formInputs(watch))
             val jump = redirect.select("form[action]").firstOrNull {
                 val host = runCatching { URI(it.absUrl("action")).host }.getOrNull().orEmpty()
                 host == "farsiland.buzz" || host == "www.farsiland.buzz"
-            } ?: return@withContext null
+            } ?: return@withContext emptyList()
             val qualityPage = fetch(action(jump, redirect), formInputs(jump))
             val forms = qualityPage.select("form").mapNotNull { form ->
                 val values = formInputs(form)
@@ -1397,19 +1397,23 @@ private suspend fun resolveFarsiLandSignedStream(episodeUrl: String): NativeVide
                 if (quality in listOf(480, 720, 1080) && values["postid"]?.isNotBlank() == true)
                     Triple(form, values, quality!!) else null
             }
-            val selected = forms.firstOrNull { it.third == 720 }
-                ?: forms.firstOrNull { it.third == 1080 }
-                ?: forms.firstOrNull { it.third == 480 }
-                ?: return@withContext null
-            val player = fetch(action(selected.first, qualityPage), selected.second)
-            val html = player.html().replace("&amp;", "&")
-            val media = Regex("""https://pl\.farsiland\.buzz/[^'"\s<>]+?\.mp4\?md5=[A-Za-z0-9_-]+""")
-                .find(html)?.value ?: return@withContext null
-            val quality = Regex("""[.-](480|720|1080)\.mp4""").find(media)?.groupValues?.get(1)
-                ?: selected.third.toString()
-            val result = NativeVideoSource("FarsiLand", media, quality)
-            if (verifyPublishedMediaUrl(result.url)) result else null
-        } catch (_: Exception) { null }
+            // Each quality is a separate published POST form, potentially with a
+            // different signed token. Do not assume 480/720/1080 share one token.
+            val results = mutableListOf<NativeVideoSource>()
+            for ((form, values, requestedQuality) in forms.sortedByDescending { it.third }) {
+                val player = try { fetch(action(form, qualityPage), values) }
+                    catch (_: Exception) { continue }
+                val html = player.html().replace("&amp;", "&")
+                val media = Regex("""https://pl\\.farsiland\\.buzz/[^'"\\s<>]+?\\.mp4\\?md5=[A-Za-z0-9_-]+""")
+                    .find(html)?.value ?: continue
+                val foundQuality = Regex("""[.-](480|720|1080)\\.mp4""")
+                    .find(media)?.groupValues?.get(1) ?: requestedQuality.toString()
+                val candidate = NativeVideoSource("FarsiLand ${foundQuality}p", media, foundQuality)
+                if (verifyPublishedMediaUrl(candidate.url) && results.none { it.url == candidate.url })
+                    results.add(candidate)
+            }
+            results.sortedBy { it.quality.toIntOrNull() ?: 0 }
+        } catch (_: Exception) { emptyList() }
     }
 
 private suspend fun verifyPublishedMediaUrl(rawUrl: String): Boolean = withContext(Dispatchers.IO) {
@@ -1822,10 +1826,10 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
             URI(url).path.orEmpty().startsWith("/movies/")
         )) {
             playerMessage = "Resolving FarsiLand stream…"
-            val source = resolveFarsiLandSignedStream(url)
-            if (source != null) {
-                nativeSources = (nativeSources + source).distinctBy { it.url }
-                nativeChoice = source
+            val sources = resolveFarsiLandSignedStreams(url)
+            if (sources.isNotEmpty()) {
+                nativeSources = (nativeSources + sources).distinctBy { it.url }
+                nativeChoice = sources.firstOrNull { it.quality == "720" } ?: sources.first()
                 accessPromptActive = false
                 playerMessage = "Playing FarsiLand video natively"
             } else {
