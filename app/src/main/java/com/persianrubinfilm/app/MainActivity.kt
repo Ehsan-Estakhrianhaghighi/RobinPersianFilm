@@ -1386,6 +1386,55 @@ private suspend fun verifyPublishedMediaUrl(rawUrl: String): Boolean = withConte
 /** Start the selected title through its own HTML5/JW Player, never an advert.
  * WebView is configured to allow media playback without another gesture.
  * Retry only if the player remains paused and no required-access dialog exists. */
+/** FarsiLand routes through an episode poster, a FilmSerial quality menu,
+ * and a second video poster. Follow only visible, player-related controls. */
+private const val advanceFarsiLandPlaybackScript = """
+(function(){
+  var host=location.hostname.toLowerCase();
+  var land=host==='farsiland.com'||host==='www.farsiland.com';
+  var serial=host.indexOf('filmserial.')>=0;
+  if(!land&&!serial)return 'other-site';
+  var now=Date.now();
+  if(now-(window.__robinLastLandClick||0)<2500)return 'waiting';
+  function visible(el){
+    if(!el)return false;
+    var r=el.getBoundingClientRect(),s=getComputedStyle(el);
+    return r.width>12&&r.height>12&&s.visibility!=='hidden'&&s.display!=='none';
+  }
+  function safe(el){
+    if(!visible(el)||el.closest('ins.adsbygoogle,[class*="advert"],[class*="banner"],[class*="unlock"]'))return false;
+    var t=(el.innerText||el.textContent||'').toLowerCase();
+    return !/sign up|subscribe|open ad|advertis|unlock content/.test(t);
+  }
+  var controls=[...document.querySelectorAll('a[href],button,[role="button"]')].filter(safe);
+  if(serial){
+    var choices=controls.filter(function(el){
+      return /(^|[^0-9])(480|720|1080)(p)?([^0-9]|$)/.test((el.textContent||'').trim()) &&
+        (el.closest('main,[class*="quality"],[class*="player"],[class*="video"]')||el.tagName==='A');
+    });
+    choices.sort(function(a,b){
+      function rank(n){var t=n.textContent||'';return /720/.test(t)?3:/1080/.test(t)?2:1;}
+      return rank(b)-rank(a);
+    });
+    if(choices.length){
+      window.__robinLastLandClick=now;
+      choices[0].click();
+      return 'quality-selected';
+    }
+  }
+  if(land){
+    var player=document.querySelector('.jwplayer,video,[class*="player"],[class*="video"]');
+    if(!player)return 'waiting-player';
+    var poster=[...player.querySelectorAll('a,button,[role="button"],[class*="play"]')].find(function(el){
+      var c=(String(el.className||'')+' '+(el.getAttribute('aria-label')||'')).toLowerCase();
+      return visible(el)&&/play|watch|poster/.test(c)&&safe(el);
+    });
+    if(poster){window.__robinLastLandClick=now;poster.click();return 'opening-quality-selection';}
+  }
+  return 'waiting-for-provider';
+})();
+"""
+
 private const val startFinalPosterPlaybackScript = """
 (function(){
   if(location.pathname.indexOf('/play-hq-player')!==0 && !(location.hostname.endsWith('farsiland.com') && /^\/(episodes|movies)\//.test(location.pathname)))return 'not-final';
@@ -1531,9 +1580,14 @@ private const val discoverNativeVideoScript = """
 })();
 """
 
+private fun isFilmSerialPage(url: String?): Boolean = try {
+    val host = URI(url.orEmpty()).host?.lowercase().orEmpty()
+    host == "filmserial.com" || host.endsWith(".filmserial.com") || host == "filmserial.tv" || host.endsWith(".filmserial.tv")
+} catch (_: Exception) { false }
+
 private fun isFinalPlayerPage(url: String?): Boolean = try {
     val path = URI(url.orEmpty()).path?.lowercase().orEmpty().trimEnd('/')
-    path == "/play-hq-player" || (isFarsiLandPage(url) && (path.startsWith("/episodes/") || path.startsWith("/movies/")))
+    path == "/play-hq-player" || (isFarsiLandPage(url) && (path.startsWith("/episodes/") || path.startsWith("/movies/"))) || isFilmSerialPage(url)
 } catch (_: Exception) { false }
 
 @SuppressLint("SetJavaScriptEnabled")
@@ -1770,7 +1824,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                         showWebContent = true
                         manualContinuation = false
                         playerMessage = "Choose player or video quality"
-                        if (!isFarsiLandPage(loadedUrl)) {
+                        if (!isFarsiLandPage(loadedUrl) && !isFilmSerialPage(loadedUrl)) {
                             view.evaluateJavascript(compactPlaybackScript, null)
                             view.evaluateJavascript(playerAdCleaner, null)
                             view.evaluateJavascript(reduceFinalAdSpaceScript, null)
@@ -1817,7 +1871,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                     val target = request?.url ?: return false
                     val hostname = target.host?.lowercase() ?: return true
                     // Keep top-level redirects to unrelated advertising websites blocked.
-                    return request.isForMainFrame && hostname != "farsiplex.com" && hostname != "www.farsiplex.com" && hostname != "farsiland.com" && hostname != "www.farsiland.com"
+                    return request.isForMainFrame && hostname != "farsiplex.com" && hostname != "www.farsiplex.com" && hostname != "farsiland.com" && hostname != "www.farsiland.com" && !isFilmSerialPage(target.toString())
                 }
             }
             loadUrl(url)
@@ -1875,6 +1929,9 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                 manualContinuation = false
             }
             if (atFinal && showWebContent) {
+                if (isFarsiLandPage(web.url) || isFilmSerialPage(web.url)) {
+                    web.evaluateJavascript(advanceFarsiLandPlaybackScript, null)
+                }
                 // Request the movie through the provider's own Play control,
                 // then capture the signed media request for native playback.
                 if (nativeChoice == null) {
