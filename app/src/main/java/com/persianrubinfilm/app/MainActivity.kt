@@ -79,6 +79,8 @@ private val background = Color(0xFF101015)
 private val panel = Color(0xFF24242D)
 private val accent = Color(0xFFE63B45)
 private const val site = "https://farsiplex.com"
+private const val farsilandSite = "https://farsiland.com"
+private fun isFarsiLandPage(url: String?): Boolean = try { URI(url.orEmpty()).host?.lowercase()?.let { it == "farsiland.com" || it == "www.farsiland.com" } == true } catch (_: Exception) { false }
 
 // FarsiPlex streams are served from both CDN domains, e.g. pl.farsiland.buzz.
 // Keep the exact signed URL issued for this title; never fabricate its token.
@@ -128,7 +130,7 @@ private enum class Tab { Home, Movies, Series, History, Favorites }
 
 private fun sameSite(url: String): Boolean = try {
     val uri = URI(url)
-    uri.scheme == "https" && (uri.host == "farsiplex.com" || uri.host == "www.farsiplex.com")
+    uri.scheme == "https" && (uri.host == "farsiplex.com" || uri.host == "www.farsiplex.com" || uri.host == "farsiland.com" || uri.host == "www.farsiland.com")
 } catch (_: Exception) { false }
 
 private fun cleanImage(value: String?): String? = value?.trim()?.takeIf { it.isNotBlank() && !it.startsWith("data:") }
@@ -196,12 +198,62 @@ private suspend fun readCatalog(series: Boolean): List<TitleItem> = withContext(
     found.values.toList()
 }
 
+private fun extractFarsiLandTitles(doc: Document, series: Boolean): List<TitleItem> {
+    val prefix = if (series) "/tvshows/" else "/movies/"
+    val result = linkedMapOf<String, TitleItem>()
+    for (link in doc.select("a[href]")) {
+        val raw = link.absUrl("href")
+        if (!isFarsiLandPage(raw)) continue
+        val path = try { URI(raw).path.orEmpty() } catch (_: Exception) { continue }
+        if (!path.startsWith(prefix) || path.trimEnd('/') == prefix.trimEnd('/')) continue
+        val page = raw.substringBefore('?').trimEnd('/') + "/"
+        val heading = link.selectFirst("h2,h3,h4")?.text() ?: link.closest("h2,h3,h4")?.text()
+        val poster = imageOf(link, doc)
+        val title = (heading ?: link.attr("title").ifBlank { link.text() })
+            .ifBlank { link.selectFirst("img")?.attr("alt").orEmpty() }.trim()
+        if (title.isBlank() || title.length > 110 || (poster == null && heading == null)) continue
+        val existing = result[page]
+        if (existing == null || (existing.poster == null && poster != null))
+            result[page] = TitleItem(title, page, poster, series)
+    }
+    return result.values.toList()
+}
+
+private suspend fun readFarsiLandCatalog(series: Boolean): List<TitleItem> = withContext(Dispatchers.IO) {
+    val catalog = if (series) "$farsilandSite/series-26/" else "$farsilandSite/iran-movie-2025/"
+    val pages = ArrayDeque<String>()
+    pages.add("$farsilandSite/home")
+    pages.add(catalog)
+    val seen = mutableSetOf<String>()
+    val found = linkedMapOf<String, TitleItem>()
+    while (pages.isNotEmpty() && seen.size < 5) {
+        val url = pages.removeFirst()
+        if (!seen.add(url)) continue
+        val doc = try { readPage(url) } catch (_: Exception) { continue }
+        extractFarsiLandTitles(doc, series).forEach { found[it.page] = it }
+        if (url != "$farsilandSite/home") {
+            for (link in doc.select(".pagination a[href], a.page-numbers[href], nav.pagination a[href]")) {
+                val next = link.absUrl("href")
+                if (isFarsiLandPage(next) && next.startsWith(catalog) && next !in seen && next !in pages)
+                    pages.add(next)
+            }
+        }
+    }
+    found.values.toList()
+}
+
+private suspend fun readCombinedCatalog(series: Boolean): List<TitleItem> = withContext(Dispatchers.IO) {
+    val plex = try { readCatalog(series) } catch (_: Exception) { emptyList() }
+    val land = try { readFarsiLandCatalog(series) } catch (_: Exception) { emptyList() }
+    (plex + land).distinctBy { it.page }
+}
+
 private suspend fun readEpisodes(seriesUrl: String): List<EpisodeItem> = withContext(Dispatchers.IO) {
     val doc = readPage(seriesUrl)
     val found = linkedMapOf<String, EpisodeItem>()
-    for (a in doc.select("a[href*=/episode/]")) {
+    for (a in doc.select(if (isFarsiLandPage(seriesUrl)) "a[href*=/episodes/]" else "a[href*=/episode/]")) {
         val url = a.absUrl("href").substringBefore('?').trimEnd('/') + "/"
-        if (!sameSite(url) || url == "$site/episode/") continue
+        if (!sameSite(url) || url == "$site/episode/" || url == "$farsilandSite/episodes/") continue
         val context = (a.closest("li, article, .item, .episode, .episod, .seasons-episodes, .season")?.text()
             ?: a.parent()?.text() ?: a.text()).take(300)
         val nearby = "$context ${a.attr("title")} ${a.text()} ${url.substringAfterLast('/', "")}".lowercase()
@@ -329,7 +381,7 @@ private fun RobinApp() {
     fun openPlayback(page: String) {
         scope.launch {
             resolvingPlayer = true
-            val destination = resolvePublishedPlaybackPage(page)
+            val destination = if (isFarsiLandPage(page)) page else resolvePublishedPlaybackPage(page)
             resolvingPlayer = false
             playerUrl = destination
         }
@@ -342,8 +394,8 @@ private fun RobinApp() {
     }
     LaunchedEffect(Unit) {
         loading = true
-        val m = try { readCatalog(false) } catch (_: Exception) { emptyList() }
-        val s = try { readCatalog(true) } catch (_: Exception) { emptyList() }
+        val m = try { readCombinedCatalog(false) } catch (_: Exception) { emptyList() }
+        val s = try { readCombinedCatalog(true) } catch (_: Exception) { emptyList() }
         movies = m; series = s; loading = false
         if (m.isEmpty() && s.isEmpty()) message = "Could not load FarsiPlex. Check your connection and try Refresh."
     }
@@ -449,8 +501,8 @@ private fun RobinApp() {
                     TvTextButton(onClick = {
                         scope.launch {
                             loading = true
-                            movies = try { readCatalog(false) } catch (_: Exception) { movies }
-                            series = try { readCatalog(true) } catch (_: Exception) { series }
+                            movies = try { readCombinedCatalog(false) } catch (_: Exception) { movies }
+                            series = try { readCombinedCatalog(true) } catch (_: Exception) { series }
                             loading = false
                         }
                     }) { Text("Refresh") }
@@ -1481,7 +1533,7 @@ private const val discoverNativeVideoScript = """
 
 private fun isFinalPlayerPage(url: String?): Boolean = try {
     val path = URI(url.orEmpty()).path?.lowercase().orEmpty().trimEnd('/')
-    path == "/play-hq-player"
+    path == "/play-hq-player" || (isFarsiLandPage(url) && (path.startsWith("/episodes/") || path.startsWith("/movies/")))
 } catch (_: Exception) { false }
 
 @SuppressLint("SetJavaScriptEnabled")
@@ -1763,7 +1815,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                     val target = request?.url ?: return false
                     val hostname = target.host?.lowercase() ?: return true
                     // Keep top-level redirects to unrelated advertising websites blocked.
-                    return request.isForMainFrame && hostname != "farsiplex.com" && hostname != "www.farsiplex.com"
+                    return request.isForMainFrame && hostname != "farsiplex.com" && hostname != "www.farsiplex.com" && hostname != "farsiland.com" && hostname != "www.farsiland.com"
                 }
             }
             loadUrl(url)
