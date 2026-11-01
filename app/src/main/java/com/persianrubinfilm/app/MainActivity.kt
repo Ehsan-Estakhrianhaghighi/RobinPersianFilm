@@ -1355,6 +1355,63 @@ private suspend fun probeAuthorizedQualityVariants(source: NativeVideoSource): L
 /** Only discover media URLs already exposed to the user's authorized browser page.
  * No token generation, ad-unlock circumvention or cross-origin iframe inspection.
  * Native playback is optional because some hosts require their embedded player. */
+/** Follow FarsiLand's actual HTML POST forms; URLs and post IDs always
+ * originate from the selected episode. Never reuse a saved signed link. */
+private suspend fun resolveFarsiLandSignedStream(episodeUrl: String): NativeVideoSource? =
+    withContext(Dispatchers.IO) {
+        if (!isFarsiLandPage(episodeUrl)) return@withContext null
+        try {
+            val cookies = mutableMapOf<String, String>()
+            fun fetch(url: String, values: Map<String, String>? = null): Document {
+                val host = URI(url).host?.lowercase().orEmpty()
+                require(host == "farsiland.com" || host == "www.farsiland.com" ||
+                    host == "farsiland.buzz" || host == "www.farsiland.buzz")
+                val request = Jsoup.connect(url).userAgent(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36"
+                ).referrer(episodeUrl).timeout(18000).followRedirects(true).cookies(cookies)
+                    .ignoreHttpErrors(false)
+                val response = if (values == null) request.execute()
+                    else request.data(values).method(org.jsoup.Connection.Method.POST).execute()
+                cookies.putAll(response.cookies())
+                return response.parse()
+            }
+            fun formInputs(form: org.jsoup.nodes.Element): Map<String, String> =
+                form.select("input[name]").associate { it.attr("name") to it.attr("value") }
+            fun action(form: org.jsoup.nodes.Element, doc: Document): String =
+                form.absUrl("action").ifBlank { doc.location() }
+
+            val episode = fetch(episodeUrl)
+            // The real episode contains a watch form whose action points to redirect.php.
+            val watch = episode.select("form[action]").firstOrNull {
+                it.absUrl("action").contains("farsiland.buzz/redirect.php")
+            } ?: return@withContext null
+            val redirect = fetch(action(watch, episode), formInputs(watch))
+            val jump = redirect.select("form[action]").firstOrNull {
+                val host = runCatching { URI(it.absUrl("action")).host }.getOrNull().orEmpty()
+                host == "farsiland.buzz" || host == "www.farsiland.buzz"
+            } ?: return@withContext null
+            val qualityPage = fetch(action(jump, redirect), formInputs(jump))
+            val forms = qualityPage.select("form").mapNotNull { form ->
+                val values = formInputs(form)
+                val quality = values["q"]?.toIntOrNull()
+                if (quality in listOf(480, 720, 1080) && values["postid"]?.isNotBlank() == true)
+                    Triple(form, values, quality!!) else null
+            }
+            val selected = forms.firstOrNull { it.third == 720 }
+                ?: forms.firstOrNull { it.third == 1080 }
+                ?: forms.firstOrNull { it.third == 480 }
+                ?: return@withContext null
+            val player = fetch(action(selected.first, qualityPage), selected.second)
+            val html = player.html().replace("&amp;", "&")
+            val media = Regex("""https://pl\\.farsiland\\.buzz/[^'"\\s<>]+?\\.mp4\\?md5=[A-Za-z0-9_-]+""")
+                .find(html)?.value ?: return@withContext null
+            val quality = Regex("""[.-](480|720|1080)\\.mp4""").find(media)?.groupValues?.get(1)
+                ?: selected.third.toString()
+            val result = NativeVideoSource("FarsiLand", media, quality)
+            if (verifyPublishedMediaUrl(result.url)) result else null
+        } catch (_: Exception) { null }
+    }
+
 private suspend fun verifyPublishedMediaUrl(rawUrl: String): Boolean = withContext(Dispatchers.IO) {
     val uri = try { URI(rawUrl) } catch (_: Exception) { return@withContext false }
     val host = uri.host?.lowercase().orEmpty()
@@ -1755,6 +1812,22 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
             pendingSourceChange = false
             nativeChoice = nativeSources.firstOrNull { it.url == rawUrl } ?: source
             playerMessage = "Playing ${quality}p natively"
+        }
+    }
+    // Resolve the selected FarsiLand episode through its documented POST
+    // chain. This does not depend on a changing /movies/ slug or a Play tap.
+    LaunchedEffect(url) {
+        if (isFarsiLandPage(url) && URI(url).path.orEmpty().startsWith("/episodes/")) {
+            playerMessage = "Resolving FarsiLand stream…"
+            val source = resolveFarsiLandSignedStream(url)
+            if (source != null) {
+                nativeSources = (nativeSources + source).distinctBy { it.url }
+                nativeChoice = source
+                accessPromptActive = false
+                playerMessage = "Playing FarsiLand video natively"
+            } else {
+                playerMessage = "FarsiLand stream unavailable; trying website player"
+            }
         }
     }
     // The final page can expose a signed source before requesting it.
