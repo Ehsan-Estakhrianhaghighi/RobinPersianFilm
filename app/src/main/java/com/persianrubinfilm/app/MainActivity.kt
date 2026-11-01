@@ -1195,7 +1195,7 @@ private const val scrollToVideoSourcesScript = """
  * class names. Re-run after dynamic insertions, without removing media nodes. */
 private const val isolateFinalPlayerScript = """
 (function(){
-  if(location.pathname.indexOf('/play-hq-player')!==0)return 'other-page';
+  if(location.pathname.indexOf('/play-hq-player')!==0 && !(location.hostname.endsWith('farsiland.com') && /^\/(episodes|movies)\//.test(location.pathname)))return 'other-page';
   function visible(el){
     if(!el||!el.getBoundingClientRect)return false;
     var r=el.getBoundingClientRect(),cs=getComputedStyle(el);
@@ -1388,7 +1388,7 @@ private suspend fun verifyPublishedMediaUrl(rawUrl: String): Boolean = withConte
  * Retry only if the player remains paused and no required-access dialog exists. */
 private const val startFinalPosterPlaybackScript = """
 (function(){
-  if(location.pathname.indexOf('/play-hq-player')!==0)return 'not-final';
+  if(location.pathname.indexOf('/play-hq-player')!==0 && !(location.hostname.endsWith('farsiland.com') && /^\/(episodes|movies)\//.test(location.pathname)))return 'not-final';
   function visible(n){
     if(!n||!n.getBoundingClientRect)return false;
     var r=n.getBoundingClientRect(),style=getComputedStyle(n);
@@ -1479,7 +1479,7 @@ private const val startFinalPosterPlaybackScript = """
 
 private const val discoverNativeVideoScript = """
 (function(){
-  if(location.pathname.indexOf('/play-hq-player')!==0)return '[]';
+  if(location.pathname.indexOf('/play-hq-player')!==0 && !(location.hostname.endsWith('farsiland.com') && /^\/(episodes|movies)\//.test(location.pathname)))return '[]';
   var docs=[document];
   for(var depth=0;depth<2;depth++){
     docs.slice().forEach(function(doc){
@@ -1770,11 +1770,13 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                         showWebContent = true
                         manualContinuation = false
                         playerMessage = "Choose player or video quality"
-                        view.evaluateJavascript(compactPlaybackScript, null)
-                        view.evaluateJavascript(playerAdCleaner, null)
-                        view.evaluateJavascript(reduceFinalAdSpaceScript, null)
-                        view.evaluateJavascript(restorePlayerScrollScript, null)
-                        view.evaluateJavascript(isolateFinalPlayerScript, null)
+                        if (!isFarsiLandPage(loadedUrl)) {
+                            view.evaluateJavascript(compactPlaybackScript, null)
+                            view.evaluateJavascript(playerAdCleaner, null)
+                            view.evaluateJavascript(reduceFinalAdSpaceScript, null)
+                            view.evaluateJavascript(restorePlayerScrollScript, null)
+                            view.evaluateJavascript(isolateFinalPlayerScript, null)
+                        }
                     }
                     // Probe for the required access dialog promptly on EVERY page.
                     view.evaluateJavascript(startRequiredAccessAdScript) { raw ->
