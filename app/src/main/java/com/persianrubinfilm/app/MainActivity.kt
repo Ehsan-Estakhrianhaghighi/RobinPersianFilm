@@ -1195,7 +1195,7 @@ private const val scrollToVideoSourcesScript = """
  * class names. Re-run after dynamic insertions, without removing media nodes. */
 private const val isolateFinalPlayerScript = """
 (function(){
-  if(location.pathname.indexOf('/play-hq-player')!==0 && !(location.hostname.endsWith('farsiland.com') && /^\/(episodes|movies)\//.test(location.pathname)))return 'other-page';
+  if(location.pathname.indexOf('/play-hq-player')!==0 && !(location.hostname.endsWith('farsiland.com') && /^\/(episodes|movies)\//.test(location.pathname)) && location.hostname.indexOf('filmserial.')<0)return 'other-page';
   function visible(el){
     if(!el||!el.getBoundingClientRect)return false;
     var r=el.getBoundingClientRect(),cs=getComputedStyle(el);
@@ -1395,6 +1395,7 @@ private const val advanceFarsiLandPlaybackScript = """
   var serial=host.indexOf('filmserial.')>=0;
   if(!land&&!serial)return 'other-site';
   var now=Date.now();
+  if(window.__robinLandStepDone)return 'waiting';
   if(now-(window.__robinLastLandClick||0)<2500)return 'waiting';
   function visible(el){
     if(!el)return false;
@@ -1418,6 +1419,7 @@ private const val advanceFarsiLandPlaybackScript = """
     });
     if(choices.length){
       window.__robinLastLandClick=now;
+      window.__robinLandStepDone=true;
       choices[0].click();
       return 'quality-selected';
     }
@@ -1429,7 +1431,7 @@ private const val advanceFarsiLandPlaybackScript = """
       var c=(String(el.className||'')+' '+(el.getAttribute('aria-label')||'')).toLowerCase();
       return visible(el)&&/play|watch|poster/.test(c)&&safe(el);
     });
-    if(poster){window.__robinLastLandClick=now;poster.click();return 'opening-quality-selection';}
+    if(poster){window.__robinLastLandClick=now;window.__robinLandStepDone=true;poster.click();return 'opening-quality-selection';}
   }
   return 'waiting-for-provider';
 })();
@@ -1437,7 +1439,7 @@ private const val advanceFarsiLandPlaybackScript = """
 
 private const val startFinalPosterPlaybackScript = """
 (function(){
-  if(location.pathname.indexOf('/play-hq-player')!==0 && !(location.hostname.endsWith('farsiland.com') && /^\/(episodes|movies)\//.test(location.pathname)))return 'not-final';
+  if(location.pathname.indexOf('/play-hq-player')!==0 && !(location.hostname.endsWith('farsiland.com') && /^\/(episodes|movies)\//.test(location.pathname)) && location.hostname.indexOf('filmserial.')<0)return 'not-final';
   function visible(n){
     if(!n||!n.getBoundingClientRect)return false;
     var r=n.getBoundingClientRect(),style=getComputedStyle(n);
@@ -1528,7 +1530,7 @@ private const val startFinalPosterPlaybackScript = """
 
 private const val discoverNativeVideoScript = """
 (function(){
-  if(location.pathname.indexOf('/play-hq-player')!==0 && !(location.hostname.endsWith('farsiland.com') && /^\/(episodes|movies)\//.test(location.pathname)))return '[]';
+  if(location.pathname.indexOf('/play-hq-player')!==0 && !(location.hostname.endsWith('farsiland.com') && /^\/(episodes|movies)\//.test(location.pathname)) && location.hostname.indexOf('filmserial.')<0)return '[]';
   var docs=[document];
   for(var depth=0;depth<2;depth++){
     docs.slice().forEach(function(doc){
