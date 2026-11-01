@@ -1403,9 +1403,9 @@ private suspend fun resolveFarsiLandSignedStream(episodeUrl: String): NativeVide
                 ?: return@withContext null
             val player = fetch(action(selected.first, qualityPage), selected.second)
             val html = player.html().replace("&amp;", "&")
-            val media = Regex("""https://pl\\.farsiland\\.buzz/[^'"\\s<>]+?\\.mp4\\?md5=[A-Za-z0-9_-]+""")
+            val media = Regex("""https://pl\.farsiland\.buzz/[^'"\s<>]+?\.mp4\?md5=[A-Za-z0-9_-]+""")
                 .find(html)?.value ?: return@withContext null
-            val quality = Regex("""[.-](480|720|1080)\\.mp4""").find(media)?.groupValues?.get(1)
+            val quality = Regex("""[.-](480|720|1080)\.mp4""").find(media)?.groupValues?.get(1)
                 ?: selected.third.toString()
             val result = NativeVideoSource("FarsiLand", media, quality)
             if (verifyPublishedMediaUrl(result.url)) result else null
