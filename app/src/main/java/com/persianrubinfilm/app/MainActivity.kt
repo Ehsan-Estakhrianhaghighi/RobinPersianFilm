@@ -1913,7 +1913,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                     val target = request?.url ?: return false
                     val hostname = target.host?.lowercase() ?: return true
                     // Keep top-level redirects to unrelated advertising websites blocked.
-                    return request.isForMainFrame && hostname != "farsiplex.com" && hostname != "www.farsiplex.com" && hostname != "farsiland.com" && hostname != "www.farsiland.com" && !isFilmSerialPage(target.toString()) && !isFarsiLandPlaybackPage(target.toString())
+                    return request.isForMainFrame && hostname != "farsiplex.com" && hostname != "www.farsiplex.com" && hostname != "farsiland.com" && hostname != "www.farsiland.com" && !isFilmSerialPage(target.toString()) && !isFarsiLandPlaybackPage(target.toString()) && hostname != "farsiland.buzz" && hostname != "www.farsiland.buzz"
                 }
             }
             loadUrl(url)
