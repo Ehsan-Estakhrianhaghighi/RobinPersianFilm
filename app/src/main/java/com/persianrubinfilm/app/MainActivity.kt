@@ -2169,12 +2169,19 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                 if (nativeSources.isNotEmpty()) {
                     Text("Video options", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
                     val groupedSources = nativeSources.distinctBy { it.url }
-                    val sourceGroups = groupedSources.groupBy(::nativeSourceGroupKey)
-                    val activeGroup = nativeChoice?.let(::nativeSourceGroupKey)
+                    // FarsiLand publishes each resolution through a separate POST form,
+                    // so its URLs may not share a filename stem. Treat those as
+                    // quality choices rather than separate media servers.
+                    val farsiLandMovie = isFarsiLandPage(url) &&
+                        URI(url).path.orEmpty().startsWith("/movies/")
+                    val sourceGroups = if (farsiLandMovie)
+                        mapOf("farsiland-movie" to groupedSources)
+                    else groupedSources.groupBy(::nativeSourceGroupKey)
+                    val activeGroup = if (farsiLandMovie) "farsiland-movie" else nativeChoice?.let(::nativeSourceGroupKey)
                     val displayedQualities = activeGroup?.let { sourceGroups[it] }
                         ?: sourceGroups.values.firstOrNull().orEmpty()
-                    Text("Available sources", color = Color.LightGray, fontSize = 12.sp)
-                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+                    if (!farsiLandMovie) Text("Available sources", color = Color.LightGray, fontSize = 12.sp)
+                    if (!farsiLandMovie) Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
                         sourceGroups.entries.forEachIndexed { index, entry ->
                             val candidate = entry.value.firstOrNull { it.quality == nativeChoice?.quality }
                                 ?: entry.value.first()
