@@ -124,9 +124,45 @@ private tailrec fun findMainActivity(context: Context): MainActivity? = when (co
     else -> null
 }
 
-private data class TitleItem(val title: String, val page: String, val poster: String?, val series: Boolean)
+private data class TitleItem(val title: String, val page: String, val poster: String?, val series: Boolean, val publishedAt: Long? = null, val catalogRank: Int = Int.MAX_VALUE)
 private data class EpisodeItem(val name: String, val page: String, val season: Int, val number: Int)
 private enum class Tab { Home, Movies, Series, History, Favorites }
+private enum class CatalogOrder { Newest, Alphabetical }
+
+// Normalize presentation differences when comparing titles from two providers.
+// Keep the category in the key, so a movie and series with the same name coexist.
+private fun titleIdentity(item: TitleItem): String =
+    (if (item.series) "series:" else "movie:") +
+    java.text.Normalizer.normalize(item.title, java.text.Normalizer.Form.NFKC)
+        .lowercase(java.util.Locale.ROOT)
+        .replace(Regex("""[\\u064B-\\u065F\\u0670]"""), "")
+        .replace('ي', 'ی').replace('ك', 'ک')
+        .replace(Regex("""[^\\p{L}\\p{N}]"""), "")
+
+private fun catalogNewest(items: List<TitleItem>): List<TitleItem> =
+    items.sortedWith(compareByDescending<TitleItem> { it.publishedAt ?: Long.MIN_VALUE }
+        .thenBy { it.catalogRank })
+
+private fun displayCatalog(items: List<TitleItem>, order: CatalogOrder): List<TitleItem> =
+    when (order) {
+        CatalogOrder.Newest -> catalogNewest(items)
+        CatalogOrder.Alphabetical -> items.sortedWith(
+            compareBy<TitleItem> { it.title.lowercase(java.util.Locale.ROOT) }.thenBy { it.page })
+    }
+
+// Publication time when present; otherwise retain each site's feed order.
+private fun catalogPublishedAt(link: Element): Long? {
+    val container = link.closest("article,li,.item,.movie,.tvshow,.card,.poster,.owl-item")
+    val date = (container?.selectFirst("time[datetime], [itemprop=datePublished][content]") 
+        ?: link.selectFirst("time[datetime], [itemprop=datePublished][content]"))
+        ?: return null
+    val raw = date.attr("datetime").ifBlank { date.attr("content") }
+    return try { java.time.Instant.parse(raw).epochSecond }
+        catch (_: Exception) {
+            try { java.time.LocalDate.parse(raw.take(10)).atStartOfDay(java.time.ZoneOffset.UTC).toEpochSecond() }
+            catch (_: Exception) { null }
+        }
+}
 
 private fun sameSite(url: String): Boolean = try {
     val uri = URI(url)
@@ -165,7 +201,7 @@ private fun extractTitles(doc: Document, series: Boolean): List<TitleItem> {
         if (!hasTitleEvidence) continue
         val poster = imageOf(link, doc)
         val old = result[url]
-        if (old == null || (old.poster == null && poster != null)) result[url] = TitleItem(title, url, poster, series)
+        if (old == null || (old.poster == null && poster != null)) result[url] = TitleItem(title, url, poster, series, catalogPublishedAt(link), result.size)
     }
     return result.values.toList()
 }
@@ -214,7 +250,7 @@ private fun extractFarsiLandTitles(doc: Document, series: Boolean): List<TitleIt
         if (title.isBlank() || title.length > 110 || (poster == null && heading == null)) continue
         val existing = result[page]
         if (existing == null || (existing.poster == null && poster != null))
-            result[page] = TitleItem(title, page, poster, series)
+            result[page] = TitleItem(title, page, poster, series, catalogPublishedAt(link), result.size)
     }
     return result.values.toList()
 }
@@ -245,7 +281,12 @@ private suspend fun readFarsiLandCatalog(series: Boolean): List<TitleItem> = wit
 private suspend fun readCombinedCatalog(series: Boolean): List<TitleItem> = withContext(Dispatchers.IO) {
     val plex = try { readCatalog(series) } catch (_: Exception) { emptyList() }
     val land = try { readFarsiLandCatalog(series) } catch (_: Exception) { emptyList() }
-    (plex + land).distinctBy { it.page }
+    // Prefer FarsiPlex regardless of the order in which providers were fetched.
+    // Keep first-party catalog order as the fallback when publish dates are absent.
+    val seenTitles = mutableSetOf<String>()
+    (plex + land).mapIndexed { index, item -> item.copy(catalogRank = index) }
+        .filter { seenTitles.add(titleIdentity(it)) }
+        .let(::catalogNewest)
 }
 
 private suspend fun readEpisodes(seriesUrl: String): List<EpisodeItem> = withContext(Dispatchers.IO) {
@@ -367,6 +408,7 @@ private fun RobinApp() {
     val store = remember { FarsiStore(context) }
     val scope = rememberCoroutineScope()
     var tab by remember { mutableStateOf(Tab.Home) }
+    var catalogOrder by remember { mutableStateOf(CatalogOrder.Newest) }
     var search by remember { mutableStateOf("") }
     var movies by remember { mutableStateOf<List<TitleItem>>(emptyList()) }
     var series by remember { mutableStateOf<List<TitleItem>>(emptyList()) }
@@ -489,15 +531,27 @@ private fun RobinApp() {
                 if (loading) LinearProgressIndicator(Modifier.fillMaxWidth())
                 if (message.isNotBlank()) Text(message, color = Color.Yellow)
                 val listed = when (tab) {
-                    Tab.Home -> (movies.take(12) + series.take(12))
+                    Tab.Home -> (0 until maxOf(minOf(movies.size, 12), minOf(series.size, 12))).flatMap { index ->
+                        listOfNotNull(movies.getOrNull(index), series.getOrNull(index))
+                    }
                     Tab.Movies -> movies
                     Tab.Series -> series
                     Tab.History -> (movies + series).filter { it.page in watched }
                     Tab.Favorites -> (movies + series).filter { it.page in favorites }
                 }.filter { search.isBlank() || it.title.contains(search, ignoreCase = true) }
+                    .let { if (tab == Tab.Home || tab == Tab.Movies || tab == Tab.Series)
+                        displayCatalog(it, catalogOrder) else it }
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text("${tab.name} (${listed.size})", fontSize = 19.sp, fontWeight = FontWeight.Bold, color = Color.White)
                     Spacer(Modifier.weight(1f))
+                    if (tab == Tab.Home || tab == Tab.Movies || tab == Tab.Series) {
+                        TvTextButton(onClick = {
+                            catalogOrder = if (catalogOrder == CatalogOrder.Newest)
+                                CatalogOrder.Alphabetical else CatalogOrder.Newest
+                        }) {
+                            Text(if (catalogOrder == CatalogOrder.Newest) "Sort: Newest" else "Sort: A–Z")
+                        }
+                    }
                     TvTextButton(onClick = {
                         scope.launch {
                             loading = true
