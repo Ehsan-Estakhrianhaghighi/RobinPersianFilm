@@ -135,9 +135,9 @@ private fun titleIdentity(item: TitleItem): String =
     (if (item.series) "series:" else "movie:") +
     java.text.Normalizer.normalize(item.title, java.text.Normalizer.Form.NFKC)
         .lowercase(java.util.Locale.ROOT)
-        .replace(Regex("""[\\u064B-\\u065F\\u0670]"""), "")
+        .replace(Regex("""[\u064B-\u065F\u0670]"""), "")
         .replace('ي', 'ی').replace('ك', 'ک')
-        .replace(Regex("""[^\\p{L}\\p{N}]"""), "")
+        .replace(Regex("""[^\p{L}\p{N}]"""), "")
 
 private fun catalogNewest(items: List<TitleItem>): List<TitleItem> =
     items.sortedWith(compareByDescending<TitleItem> { it.publishedAt ?: Long.MIN_VALUE }
