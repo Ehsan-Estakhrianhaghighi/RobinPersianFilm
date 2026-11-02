@@ -1301,7 +1301,7 @@ private data class NativeVideoSource(val label: String, val url: String, val qua
 private fun nativeSourceGroupKey(source: NativeVideoSource): String = try {
     val uri = URI(source.url)
     val basePath = uri.path.orEmpty().replace(
-        Regex("""[.-](360|480|720|1080|1440|2160)(?=\.mp4$)""", RegexOption.IGNORE_CASE),
+        Regex("""[.-](360|480|720|1080|1440|2160)(?=(?:\.[^./]+)*\.mp4$)""", RegexOption.IGNORE_CASE),
         "-quality"
     )
     "${uri.host}$basePath"
@@ -1321,7 +1321,7 @@ private suspend fun probeAuthorizedQualityVariants(source: NativeVideoSource): L
             return@withContext emptyList()
         // Some FarsiPlex titles use 01.480.mp4; others use antik-480.mp4.
         // Preserve the original delimiter and signed query string.
-        val match = Regex("""[.-](360|480|720|1080|1440|2160)\.mp4$""", RegexOption.IGNORE_CASE)
+        val match = Regex("""[.-](360|480|720|1080|1440|2160)(?=(?:\.[^./]+)*\.mp4$)""", RegexOption.IGNORE_CASE)
             .find(uri.path.orEmpty()) ?: return@withContext emptyList()
         val original = match.groupValues[1]
         val qualityRange = match.groups[1]?.range ?: return@withContext emptyList()
