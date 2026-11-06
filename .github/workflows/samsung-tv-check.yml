@@ -1,0 +1,27 @@
+name: Samsung Tizen source checks
+on:
+  push:
+    paths:
+      - 'samsung-tv/**'
+      - '.github/workflows/samsung-tv-check.yml'
+  workflow_dispatch:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate frontend JavaScript
+        run: node --check samsung-tv/app.js
+      - name: Validate companion Python server
+        run: python3 -m py_compile samsung-tv/server/server.py
+      - name: Validate Tizen manifest
+        run: python3 -c "import xml.etree.ElementTree as ET; ET.parse('samsung-tv/config.xml')"
+      - name: Bundle Tizen source
+        run: |
+          cd samsung-tv
+          zip -r ../robinpersianfilm-samsung-source.zip config.xml index.html style.css app.js
+      - name: Upload source archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: robinpersianfilm-samsung-source
+          path: robinpersianfilm-samsung-source.zip
