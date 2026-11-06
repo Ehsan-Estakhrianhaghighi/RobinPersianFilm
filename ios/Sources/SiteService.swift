@@ -76,7 +76,7 @@ actor SiteService {
     }
 
     private func publication(_ link: Element) -> Date? {
-        let context = try? link.closest("article,li,.item,.movie,.tvshow,.card,.poster")
+        let context = link.parent()
         let time = try? context?.select("time[datetime], [itemprop=datePublished][content]").first()
         guard let time else { return nil }
         let raw = ((try? time.attr("datetime")) ?? "").isEmpty
