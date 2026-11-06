@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>RobinPersianFilm for Samsung TV</title><link rel="stylesheet" href="style.css"/>
+<script src="$WEBAPIS/webapis/webapis.js"></script></head>
+<body><header><h1>RobinPersianFilm</h1><span id="status">Ready</span></header>
+<main><nav id="tabs" aria-label="Sections">
+<button data-tab="home" class="active">Home</button><button data-tab="movies">Movies</button>
+<button data-tab="series">Series</button><button data-tab="favorites">Favorites</button>
+<button id="sort">Sort: Newest</button><button id="settings">Server settings</button></nav>
+<section id="listing"><h2 id="heading">Home</h2><div id="grid"></div></section>
+<section id="details" hidden><button id="back-details">← Back</button><div id="detail-content"></div></section>
+<section id="playback" hidden><div class="player-toolbar"><button id="back-player">← Back</button>
+<span id="player-title"></span><button id="toggle-play">Pause / Play</button><button id="fullscreen">Full screen</button></div>
+<div id="quality"></div><div id="video-surface"></div><div id="time"></div></section></main>
+<dialog id="server-dialog"><form method="dialog"><h2>Catalog server</h2>
+<p>The Samsung TV app needs the companion catalog server running on a computer or hosted service.</p>
+<label>Server URL (for example http://192.168.1.10:8787)
+<input id="server-url" type="url" placeholder="http://192.168.1.10:8787" autocomplete="off"/></label>
+<div class="buttons"><button value="cancel">Cancel</button><button id="save-server" value="save">Save</button></div>
+</form></dialog>
+<script src="app.js"></script></body></html>
