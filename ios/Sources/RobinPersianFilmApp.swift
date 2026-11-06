@@ -242,7 +242,7 @@ struct FilmDetailView: View {
             loadingEpisodes = false
             if episodes.isEmpty { episodeError = "No episodes found on provider page." }
         }
-        .navigationDestination(item: $playbackURL) { page in
+        .sheet(item: $playbackURL) { page in
             PlaybackView(page: page, provider: film.provider)
         }
     }
