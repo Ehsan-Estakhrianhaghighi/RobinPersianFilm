@@ -1759,6 +1759,8 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     var selectedQuality by remember(url) { mutableStateOf("") }
     var nativeSources by remember(url) { mutableStateOf<List<NativeVideoSource>>(emptyList()) }
     var nativeChoice by remember(url) { mutableStateOf<NativeVideoSource?>(null) }
+    var lastReadySource by remember(url) { mutableStateOf<NativeVideoSource?>(null) }
+    var qualitySwitchPosition by remember(url) { mutableStateOf(0L) }
     var nativeFullscreen by remember(url) { mutableStateOf(false) }
     var nativeControlsVisible by remember(url) { mutableStateOf(false) }
     var nativePlayerView by remember(url) { mutableStateOf<PlayerView?>(null) }
@@ -1820,9 +1822,21 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                 if (isPlaying) activity?.window?.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
                 else activity?.window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             }
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_READY && nativeChoice != null) {
+                    lastReadySource = nativeChoice
+                    playerMessage = "Playing ${nativeChoice?.quality}p"
+                }
+            }
             override fun onPlayerError(error: PlaybackException) {
-                nativeChoice = null
-                playerMessage = "Native stream unavailable; returning to provider controls"
+                val previous = lastReadySource
+                if (previous != null && previous.url != nativeChoice?.url) {
+                    nativeChoice = previous
+                    playerMessage = "Selected quality unavailable; restored ${previous.quality}p"
+                } else {
+                    nativeChoice = null
+                    playerMessage = "Native stream unavailable; returning to provider controls"
+                }
             }
         }
         nativePlayer.addListener(listener)
@@ -1835,7 +1849,8 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     LaunchedEffect(nativeChoice) {
         val choice = nativeChoice
         if (choice != null) {
-            nativePlayer.setMediaItem(MediaItem.fromUri(choice.url))
+            val seekTo = qualitySwitchPosition.coerceAtLeast(0L)
+            nativePlayer.setMediaItem(MediaItem.fromUri(choice.url), seekTo)
             nativePlayer.prepare()
             nativePlayer.playWhenReady = true
         } else {
@@ -1883,7 +1898,10 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
             val sources = resolveFarsiLandSignedStreams(url)
             if (sources.isNotEmpty()) {
                 nativeSources = (nativeSources + sources).distinctBy { it.url }
-                nativeChoice = sources.firstOrNull { it.quality == "720" } ?: sources.first()
+                // A late resolver response must not revert a user's selection to 720p.
+                if (nativeChoice == null) {
+                    nativeChoice = sources.firstOrNull { it.quality == "720" } ?: sources.first()
+                }
                 accessPromptActive = false
                 playerMessage = "Playing FarsiLand video natively"
             } else {
@@ -2255,9 +2273,15 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
                         displayedQualities.distinctBy { it.quality }.forEach { candidate ->
                             val qualityLabel = if (candidate.quality == "Auto") "Auto" else "${candidate.quality}p"
-                            TvTextButton(onClick = { nativeChoice = candidate }) {
-                                Text("${if (nativeChoice?.quality == candidate.quality) "✓ " else ""}$qualityLabel",
-                                    color = if (nativeChoice?.quality == candidate.quality) Color.White else accent)
+                            TvTextButton(onClick = {
+                                if (nativeChoice?.url != candidate.url) {
+                                    qualitySwitchPosition = nativePlayer.currentPosition.coerceAtLeast(0L)
+                                    nativeChoice = candidate
+                                    playerMessage = "Switching to ${candidate.quality}p…"
+                                }
+                            }) {
+                                Text("${if (nativeChoice?.url == candidate.url) "✓ " else ""}$qualityLabel",
+                                    color = if (nativeChoice?.url == candidate.url) Color.White else accent)
                             }
                         }
                         availableQualities.filter { quality -> displayedQualities.none { it.quality == quality } }.forEach { quality ->
