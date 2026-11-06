@@ -43,7 +43,7 @@ actor SiteService {
 
     private func document(_ url: URL, fields: [String: String]? = nil,
                           referer: URL? = nil) async throws -> Document {
-        try SwiftSoup.parse(request(url, fields: fields, referer: referer), url.absoluteString)
+        try SwiftSoup.parse(await request(url, fields: fields, referer: referer), url.absoluteString)
     }
 
     // Normalizes Persian spelling and punctuation without merging different categories.
