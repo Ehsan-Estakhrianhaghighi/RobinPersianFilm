@@ -1,0 +1,33 @@
+name: iOS Build Check
+on:
+  push:
+    paths:
+      - 'ios/**'
+      - '.github/workflows/ios-build.yml'
+  workflow_dispatch:
+jobs:
+  simulator:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install XcodeGen
+        run: brew install xcodegen
+      - name: Generate Xcode project
+        working-directory: ios
+        run: xcodegen generate
+      - name: Build unsigned iOS Simulator app
+        working-directory: ios
+        run: |
+          xcodebuild -project RobinPersianFilm.xcodeproj -scheme RobinPersianFilm -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
+      - name: Archive simulator app bundle
+        if: success()
+        run: |
+          cd "$HOME/Library/Developer/Xcode/DerivedData"
+          APP=$(find . -path '*/Build/Products/Debug-iphonesimulator/RobinPersianFilm.app' -type d | head -1)
+          test -n "$APP"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "$GITHUB_WORKSPACE/RobinPersianFilm-iOS-Simulator.zip"
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: RobinPersianFilm-iOS-Simulator
+          path: RobinPersianFilm-iOS-Simulator.zip
