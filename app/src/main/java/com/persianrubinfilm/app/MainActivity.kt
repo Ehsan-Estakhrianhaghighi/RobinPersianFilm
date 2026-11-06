@@ -1764,6 +1764,7 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
     var nativeFullscreen by remember(url) { mutableStateOf(false) }
     var nativeControlsVisible by remember(url) { mutableStateOf(false) }
     var nativePlayerView by remember(url) { mutableStateOf<PlayerView?>(null) }
+    val fullscreenButtonRequester = remember(url) { FocusRequester() }
     val fullscreenForKeys by rememberUpdatedState(nativeFullscreen)
     val controlsForKeys by rememberUpdatedState(nativeControlsVisible)
     var pendingSourceChange by remember(url) { mutableStateOf(false) }
@@ -2270,8 +2271,12 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                         }
                     }
                     Text("Quality", color = Color.LightGray, fontSize = 12.sp)
+                    val qualityChoices = displayedQualities.distinctBy { it.quality }
+                    val qualityRequesters = remember(qualityChoices.map { it.url }) {
+                        qualityChoices.map { FocusRequester() }
+                    }
                     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-                        displayedQualities.distinctBy { it.quality }.forEach { candidate ->
+                        qualityChoices.forEachIndexed { index, candidate ->
                             val qualityLabel = if (candidate.quality == "Auto") "Auto" else "${candidate.quality}p"
                             TvTextButton(onClick = {
                                 if (nativeChoice?.url != candidate.url) {
@@ -2279,7 +2284,30 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                                     nativeChoice = candidate
                                     playerMessage = "Switching to ${candidate.quality}p…"
                                 }
-                            }) {
+                            }, modifier = Modifier
+                                .focusRequester(qualityRequesters[index])
+                                .onPreviewKeyEvent { keyEvent ->
+                                    if (keyEvent.type != androidx.compose.ui.input.key.KeyEventType.KeyDown) false
+                                    else when (keyEvent.key) {
+                                        Key.DirectionLeft -> {
+                                            if (index > 0) {
+                                                qualityRequesters[index - 1].requestFocus()
+                                                true
+                                            } else false
+                                        }
+                                        Key.DirectionRight -> {
+                                            if (index < qualityRequesters.lastIndex) {
+                                                qualityRequesters[index + 1].requestFocus()
+                                                true
+                                            } else false
+                                        }
+                                        Key.DirectionDown -> {
+                                            fullscreenButtonRequester.requestFocus()
+                                            true
+                                        }
+                                        else -> false
+                                    }
+                                }) {
                                 Text("${if (nativeChoice?.url == candidate.url) "✓ " else ""}$qualityLabel",
                                     color = if (nativeChoice?.url == candidate.url) Color.White else accent)
                             }
@@ -2299,7 +2327,19 @@ private fun FarsiWebPlayer(url: String, onExit: () -> Unit, modifier: Modifier =
                     }
                     if (pendingSourceChange) Text(playerMessage, color = Color.LightGray, fontSize = 12.sp)
                     if (nativeChoice != null) {
-                        TvTextButton(onClick = { nativeFullscreen = true }) {
+                        TvTextButton(
+                            onClick = { nativeFullscreen = true },
+                            modifier = Modifier.focusRequester(fullscreenButtonRequester)
+                                .onPreviewKeyEvent { keyEvent ->
+                                    if (keyEvent.type == androidx.compose.ui.input.key.KeyEventType.KeyDown &&
+                                        keyEvent.key == Key.DirectionUp && qualityRequesters.isNotEmpty()) {
+                                        val selected = qualityChoices.indexOfFirst { it.url == nativeChoice?.url }
+                                            .coerceAtLeast(0)
+                                        qualityRequesters[selected].requestFocus()
+                                        true
+                                    } else false
+                                }
+                        ) {
                             Text("⛶ Full screen", color = Color.White)
                         }
                     }
